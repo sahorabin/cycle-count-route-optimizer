@@ -3,6 +3,22 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "description": "A browser-based tool for planning warehouse cycle-count routes: pick locations, build a manual visit order, and compare it against a Dijkstra/nearest-neighbor/2-opt-generated recommended route.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sahorabin/cycle-count-route-optimizer.git"
+  },
+  "keywords": [
+    "route-optimization",
+    "warehouse",
+    "cycle-count",
+    "inventory",
+    "dijkstra",
+    "nearest-neighbor",
+    "2-opt",
+    "react",
+    "typescript"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

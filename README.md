@@ -1,32 +1,218 @@
-# React + TypeScript + Vite
+# Cycle Count Route Optimizer
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A browser-based tool that helps a warehouse worker plan a physical walking
+route for a cycle count (a partial, recurring inventory audit) and compares
+it against a system-generated route over the same stops.
 
-Currently, two official plugins are available:
+## Problem statement
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Warehouse workers doing cycle counts typically pick which bins to check and
+then walk them in whatever order occurs to them. That order is rarely the
+shortest path through the aisles, and there's usually no easy way to see how
+much walking a better-ordered route would save before committing to one.
 
-## React Compiler
+## What the application does
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+The app models a warehouse as a graph of aisles and cycle-count locations,
+lets a worker pick today's count locations and build a visit order by
+clicking them on a floor-plan map, then computes a system-recommended route
+over the same stops and shows a side-by-side comparison — total distance,
+estimated time, and percentage improvement — using only aisle-constrained
+walking distance, never straight-line distance.
 
-## Expanding the Oxlint configuration
+**This is a portfolio/demonstration project.** It runs entirely in the
+browser against one deterministic, synthetic 100-location warehouse layout
+included in the repository. It has not been deployed against a real
+warehouse, and the distance/time figures it displays are computed results
+from that included model — not measured or reported results from any real
+facility or customer.
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+## Screenshots
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+<p>
+  <img src="public/screenshots/desktop-route-comparison-ko.png" alt="Desktop view (Korean) showing the worker route vs. system-recommended route comparison, with distance units and both the location-state and route-line legends" width="700" />
+</p>
+<p>
+  <img src="public/screenshots/mobile-map-swipe-ko.png" alt="375px mobile view (Korean) showing the zoomed, horizontally pannable warehouse map with the swipe guidance hint" width="260" />
+</p>
+
+Both screenshots show the included demonstration warehouse fixture, not a
+real facility.
+
+## Intended use case
+
+Cycle counting is a common inventory-control practice: instead of shutting
+down operations for a full physical inventory, a subset of locations gets
+counted on a rotating basis. This app targets the "which locations today,
+and in what order" planning step of that workflow — the kind of tool a
+warehouse supervisor might hand to a picker at the start of a shift.
+
+## Main workflow
+
+The UI is organized as one page with three sequential steps:
+
+1. **Select locations** — check which of the 100 locations need counting
+   today, with search, zone filtering, and a compact "selected" tray.
+2. **Build the worker's route** — click the selected locations on the map,
+   in the order the worker intends to walk them. Office is always the fixed
+   starting point; there is no return trip.
+3. **Compare routes** — generate a system-recommended route over the exact
+   same stops and see it plotted alongside the worker's route, with total
+   distance, estimated time (from a configurable walking speed), and percent
+   improvement.
+
+A location can also be marked complete once counted, and a compact progress
+panel tracks completed vs. remaining against a daily target count.
+
+## Routing algorithms (verified against source)
+
+All routing distance is computed over the aisle graph, never over the (x, y)
+coordinates used for on-screen drawing — the included sample warehouse is
+deliberately laid out so straight-line and aisle-constrained distance
+diverge, so this distinction is actually exercised.
+
+- **Dijkstra** (`src/domain/dijkstra.ts`) — single-source shortest paths over
+  the walkable aisle-node graph, used to build an all-pairs distance matrix
+  (`src/domain/distanceMatrix.ts`) over the start point plus every
+  cycle-count location.
+- **Nearest neighbor** (`src/domain/nearestNeighbor.ts`) — a greedy
+  fixed-start heuristic: from the current point, repeatedly move to the
+  closest unvisited target by aisle-constrained distance until all targets
+  are visited. Never returns to the start.
+- **2-opt local search** (`src/domain/twoOpt.ts`) — deterministic local
+  search that repeatedly reverses route segments when doing so strictly
+  reduces total distance, stopping at the first local optimum. It operates
+  on an *open* path (no closed-tour edge back to the start), so segment
+  reversals are handled accordingly rather than reusing a standard
+  closed-tour formula.
+
+The "system recommended route" shown in the UI is nearest-neighbor refined
+by 2-opt. This is a reasonable heuristic combination, not a guarantee of the
+mathematically optimal route — the UI deliberately never claims otherwise.
+
+## Key features
+
+- Click-to-build manual route on an SVG floor-plan map (rack blocks, aisle
+  corridors, and bin markers — not a raw graph-node visualization)
+- Four distinct, non-color-only location states: available, selected,
+  in-route, completed
+- Worker route vs. system-recommended route comparison with a single-sentence
+  savings summary, and a route-visibility toggle (worker / recommended / both)
+- A collapsed "technical details" panel showing the raw Nearest Neighbor vs.
+  2-opt output, kept separate from the primary worker/recommended comparison
+- A deterministic, generated 100-location fixture (10 zones × 10 bins) with
+  no `Math.random` anywhere in its construction
+
+## Localization
+
+A small custom `t()`-based translation layer (`src/i18n/`) drives the entire
+UI in Korean (default) and English, with live switching and no page reload.
+There is no external i18n library dependency.
+
+## Persistence
+
+Target count, completed-location ids, language, and walking speed persist to
+`localStorage` (`src/persistence/persistedState.ts`). Each field is
+validated independently on load and falls back to a default if malformed, so
+one corrupted field can't take down the rest of the saved state. Completed
+ids from storage are cross-checked against the live 100-location fixture, so
+an id from a since-changed fixture can never resurrect as "completed."
+
+## Responsive behavior
+
+The layout is a single page (not separate routes) that adapts across three
+breakpoints, down to a 375px-wide mobile viewport. On mobile, the map
+defaults to a zoomed-in, horizontally pannable view — with a short on-screen
+hint — instead of shrinking the whole floor plan to an unreadable size; a
+"view full warehouse" toggle switches to a fit-to-width view. Horizontal
+scrolling stays confined to the map viewport; it does not cause page-level
+overflow.
+
+## Tech stack
+
+- React 19 + TypeScript
+- Vite 8 (build/dev server)
+- Vitest 4 + @testing-library/react (226 tests across 28 files at the time
+  of writing)
+- oxlint (linting)
+- No backend, no external API calls, no runtime dependencies beyond React
+  itself
+
+## Getting started
+
+```bash
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Then open the printed local URL. No environment variables or backend setup
+are required.
+
+## Scripts
+
+```bash
+npm run dev         # start the Vite dev server
+npm test             # run the test suite once (vitest run)
+npm run test:watch   # run tests in watch mode
+npm run lint         # oxlint
+npm run build        # tsc -b && vite build (this also performs type-checking;
+                      # there is no separate typecheck script)
+npm run preview      # locally preview the production build
+```
+
+Run a single test file: `npx vitest run src/domain/twoOpt.test.ts`
+Run tests matching a name: `npx vitest run -t "nearest neighbor"`
+
+## Project structure
+
+The app is split into three layers with a strict one-way dependency:
+**domain → ui → components** (domain code never imports from `ui/` or
+`components/`).
+
+```
+src/
+  domain/        Graph validation, Dijkstra, distance matrix, nearest-neighbor,
+                  2-opt, and the fixed-start-open-path route order contract
+  ui/             Presentation-only helpers with no domain logic
+                  (SVG coordinates, route-path expansion, comparison math,
+                  duration formatting, rack-layout geometry for the floor plan)
+  components/     React components (map, selectors, route editor, comparison
+                  panel, progress panel, workflow steps, language switcher)
+  i18n/           Translation context, dictionary, and hook
+  persistence/     localStorage read/write with per-field validation
+  hooks/          Manual-route state (add/remove/reorder stops)
+  data/           The sample and 100-location warehouse fixtures
+```
+
+## Known scope and limitations
+
+- Single, synthetic, hard-coded warehouse layout — there is no way to import
+  a real facility's floor plan or import/export location data.
+- No backend: all state is local to one browser (`localStorage`), so there
+  is no multi-user or multi-device sync.
+- No authentication, and no real-world GPS or indoor-positioning
+  integration — location coordinates are display-only SVG positions, not
+  real-world measurements.
+- The "technical details" panel (raw Nearest Neighbor vs. 2-opt) is
+  intentionally left untranslated/unstyled as a transparency artifact, not a
+  primary UI surface.
+- This project has not been deployed or used against a real warehouse; all
+  distance/time figures shown are computed from the included model, not
+  reported operational results.
+
+## Portfolio-oriented design and engineering decisions
+
+This project was built to demonstrate a few specific things end to end:
+
+- A clean separation between routing math (never touches pixels) and display
+  geometry (never touches distance) — enforced by the domain → ui →
+  components layering and exercised by a warehouse layout where the two
+  distance notions actually diverge.
+- Test-driven development throughout: each domain module pairs a pure
+  validator/compute function with a throwing "assert" wrapper, and both are
+  covered by tests written alongside the implementation.
+- Accessibility as a first-class constraint: location states are
+  distinguished by shape/icon/border, not color alone; the progress bar
+  carries full ARIA `role="progressbar"` semantics.
+- Bilingual UI built without an external i18n framework, to keep the
+  dependency surface minimal for a small app.

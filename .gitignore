@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Internal session-continuity / planning docs -- not published
+CLAUDE.md
+docs/
