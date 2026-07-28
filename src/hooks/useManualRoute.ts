@@ -1,8 +1,8 @@
 import { useCallback, useState } from "react";
 import type { NodeId } from "../domain/types";
 
-export function useManualRoute() {
-  const [stopIds, setStopIds] = useState<NodeId[]>([]);
+export function useManualRoute(initialStopIds: NodeId[] = []) {
+  const [stopIds, setStopIds] = useState<NodeId[]>(initialStopIds);
 
   const addStop = useCallback((id: NodeId) => {
     setStopIds((prev) => (prev.includes(id) ? prev : [...prev, id]));

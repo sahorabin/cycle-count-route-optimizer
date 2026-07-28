@@ -18,7 +18,15 @@ describe("persistedState", () => {
 
   test("round-trips a valid state", () => {
     const storage = fakeStorage();
-    const state = { targetCount: 42, completedIds: ["loc-A01"], language: "en" as const, walkingSpeed: 75 };
+    const state = {
+      targetCount: 42,
+      completedIds: ["loc-A01"],
+      language: "en" as const,
+      walkingSpeed: 75,
+      selectedIds: ["loc-A01", "loc-B03"],
+      manualRouteStopIds: ["loc-A01", "loc-B03"],
+      comparisonRequested: true,
+    };
     savePersistedState(storage, state);
     expect(loadPersistedState(storage)).toEqual(state);
   });
@@ -40,6 +48,46 @@ describe("persistedState", () => {
     expect(loadPersistedState(storage)).toEqual({
       ...DEFAULT_PERSISTED_STATE,
       walkingSpeed: 80,
+    });
+  });
+
+  test("selectedIds, manualRouteStopIds, and comparisonRequested default safely when absent (obsolete pre-existing storage)", () => {
+    const storage = fakeStorage({
+      "cycle-count-route-optimizer:v1": JSON.stringify({
+        targetCount: 10,
+        completedIds: ["loc-A01"],
+        language: "en",
+        walkingSpeed: 60,
+        // selectedIds / manualRouteStopIds / comparisonRequested intentionally omitted,
+        // simulating storage written before these fields existed.
+      }),
+    });
+    const state = loadPersistedState(storage);
+    expect(state.selectedIds).toEqual([]);
+    expect(state.manualRouteStopIds).toEqual([]);
+    expect(state.comparisonRequested).toBe(false);
+  });
+
+  test("malformed selectedIds, manualRouteStopIds, and comparisonRequested each fall back to their own default without discarding the rest", () => {
+    const storage = fakeStorage({
+      "cycle-count-route-optimizer:v1": JSON.stringify({
+        targetCount: 10,
+        completedIds: ["loc-A01"],
+        language: "en",
+        walkingSpeed: 60,
+        selectedIds: "loc-A01", // wrong type (not an array) -> falls back
+        manualRouteStopIds: ["loc-A01", 42], // mixed types -> falls back
+        comparisonRequested: "true", // wrong type (string, not boolean) -> falls back
+      }),
+    });
+    expect(loadPersistedState(storage)).toEqual({
+      targetCount: 10,
+      completedIds: ["loc-A01"],
+      language: "en",
+      walkingSpeed: 60,
+      selectedIds: [],
+      manualRouteStopIds: [],
+      comparisonRequested: false,
     });
   });
 

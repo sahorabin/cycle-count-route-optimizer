@@ -180,4 +180,105 @@ describe("App (Phase 5 dashboard)", () => {
     const progressPanel = screen.getByText("Today's progress").closest("section")!;
     expect(progressPanel.querySelector(".progress-panel__stats dd")!.textContent).toBe("1");
   });
+
+  test("persists selected locations, the worker route order, and a generated comparison across remounts via localStorage", () => {
+    const { unmount } = render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+
+    selectLocation("Zone A - Bin 01");
+    selectLocation("Zone B - Bin 03");
+    clickOnMap("Zone A - Bin 01");
+    clickOnMap("Zone B - Bin 03");
+    fireEvent.click(screen.getByRole("button", { name: "Generate recommended route" }));
+    expect(screen.getAllByText("Worker route").length).toBeGreaterThan(0);
+
+    unmount();
+    render(<App />);
+
+    // Selection survived the reload.
+    expect(screen.getByText("2 of 100 selected")).toBeTruthy();
+
+    // Worker route (order, not just membership) survived: both stops still
+    // show as "route" state, and the manual route editor lists them in the
+    // original visit order.
+    expect(document.querySelector('[data-location-id="loc-A01"]')!.getAttribute("data-state")).toBe(
+      "route",
+    );
+    expect(document.querySelector('[data-location-id="loc-B03"]')!.getAttribute("data-state")).toBe(
+      "route",
+    );
+    // First label is the fixed "Office" start; the two restored stops
+    // follow in their original visit order (A01 before B03).
+    const stopLabels = document.querySelectorAll(".manual-route-editor__label");
+    expect(Array.from(stopLabels).map((el) => el.textContent)).toEqual([
+      "Office (fixed start)",
+      "Zone A - Bin 01",
+      "Zone B - Bin 03",
+    ]);
+
+    // The previously generated comparison is still shown, not silently
+    // dropped back to the pre-generation step.
+    expect(screen.getAllByText("Worker route").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("System recommended route").length).toBeGreaterThan(0);
+    expect(document.querySelector(".comparison-hero__summary")).not.toBeNull();
+  });
+
+  test("a restored comparison is still invalidated by a real post-reload route edit", () => {
+    const { unmount } = render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    selectLocation("Zone A - Bin 01");
+    selectLocation("Zone B - Bin 03");
+    clickOnMap("Zone A - Bin 01");
+    clickOnMap("Zone B - Bin 03");
+    fireEvent.click(screen.getByRole("button", { name: "Generate recommended route" }));
+
+    unmount();
+    render(<App />);
+    expect(document.querySelector(".comparison-hero__summary")).not.toBeNull();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]);
+    expect(document.querySelector(".comparison-hero__summary")).toBeNull();
+  });
+
+  test("drops a selected-location id from localStorage that no longer exists in the fixture, and any manual-route stop that depended on it", () => {
+    window.localStorage.setItem(
+      "cycle-count-route-optimizer:v1",
+      JSON.stringify({
+        targetCount: 10,
+        completedIds: [],
+        language: "en",
+        walkingSpeed: 60,
+        selectedIds: ["loc-Z99", "loc-A01"],
+        manualRouteStopIds: ["loc-Z99", "loc-A01"],
+        comparisonRequested: true,
+      }),
+    );
+    render(<App />);
+    expect(screen.getByText("1 of 100 selected")).toBeTruthy();
+    expect(document.querySelector('[data-location-id="loc-A01"]')!.getAttribute("data-state")).toBe(
+      "route",
+    );
+  });
+
+  test("drops a manual-route stop id from localStorage that is not part of the restored selection, instead of silently routing through an unselected location", () => {
+    window.localStorage.setItem(
+      "cycle-count-route-optimizer:v1",
+      JSON.stringify({
+        targetCount: 10,
+        completedIds: [],
+        language: "en",
+        walkingSpeed: 60,
+        selectedIds: ["loc-A01"],
+        manualRouteStopIds: ["loc-A01", "loc-B03"], // loc-B03 was never (re-)selected
+        comparisonRequested: false,
+      }),
+    );
+    render(<App />);
+    expect(document.querySelector('[data-location-id="loc-A01"]')!.getAttribute("data-state")).toBe(
+      "route",
+    );
+    expect(document.querySelector('[data-location-id="loc-B03"]')!.getAttribute("data-state")).toBe(
+      "available",
+    );
+  });
 });

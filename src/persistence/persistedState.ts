@@ -3,6 +3,9 @@ export interface PersistedState {
   completedIds: string[];
   language: "ko" | "en";
   walkingSpeed: number;
+  selectedIds: string[];
+  manualRouteStopIds: string[];
+  comparisonRequested: boolean;
 }
 
 export const DEFAULT_PERSISTED_STATE: PersistedState = {
@@ -10,6 +13,9 @@ export const DEFAULT_PERSISTED_STATE: PersistedState = {
   completedIds: [],
   language: "ko",
   walkingSpeed: 60,
+  selectedIds: [],
+  manualRouteStopIds: [],
+  comparisonRequested: false,
 };
 
 const STORAGE_KEY = "cycle-count-route-optimizer:v1";
@@ -18,7 +24,7 @@ function isValidTargetCount(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 100;
 }
 
-function isValidCompletedIds(value: unknown): value is string[] {
+function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((id) => typeof id === "string");
 }
 
@@ -30,13 +36,19 @@ function isValidWalkingSpeed(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
+function isValidBoolean(value: unknown): value is boolean {
+  return typeof value === "boolean";
+}
+
 /**
  * Reads and validates each field independently: a single malformed field
  * (wrong type, out of range) falls back to that field's default without
- * discarding the rest of an otherwise-valid stored object. `completedIds`
- * is only type-validated here (string[]) -- cross-checking those ids
- * against the current 100-location fixture is the caller's job (App.tsx),
- * since this module must stay fixture-agnostic and easily testable.
+ * discarding the rest of an otherwise-valid stored object. `completedIds`,
+ * `selectedIds`, and `manualRouteStopIds` are only type-validated here
+ * (string[]) -- cross-checking those ids against the current 100-location
+ * fixture (and, for `manualRouteStopIds`, against the restored selection)
+ * is the caller's job (App.tsx), since this module must stay
+ * fixture-agnostic and easily testable.
  */
 export function loadPersistedState(storage: Pick<Storage, "getItem">): PersistedState {
   const raw = storage.getItem(STORAGE_KEY);
@@ -56,13 +68,22 @@ export function loadPersistedState(storage: Pick<Storage, "getItem">): Persisted
     targetCount: isValidTargetCount(candidate.targetCount)
       ? candidate.targetCount
       : DEFAULT_PERSISTED_STATE.targetCount,
-    completedIds: isValidCompletedIds(candidate.completedIds)
+    completedIds: isStringArray(candidate.completedIds)
       ? candidate.completedIds
       : DEFAULT_PERSISTED_STATE.completedIds,
     language: isValidLanguage(candidate.language) ? candidate.language : DEFAULT_PERSISTED_STATE.language,
     walkingSpeed: isValidWalkingSpeed(candidate.walkingSpeed)
       ? candidate.walkingSpeed
       : DEFAULT_PERSISTED_STATE.walkingSpeed,
+    selectedIds: isStringArray(candidate.selectedIds)
+      ? candidate.selectedIds
+      : DEFAULT_PERSISTED_STATE.selectedIds,
+    manualRouteStopIds: isStringArray(candidate.manualRouteStopIds)
+      ? candidate.manualRouteStopIds
+      : DEFAULT_PERSISTED_STATE.manualRouteStopIds,
+    comparisonRequested: isValidBoolean(candidate.comparisonRequested)
+      ? candidate.comparisonRequested
+      : DEFAULT_PERSISTED_STATE.comparisonRequested,
   };
 }
 

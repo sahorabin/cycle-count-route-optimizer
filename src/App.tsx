@@ -20,9 +20,28 @@ import "./App.css";
 
 const KNOWN_LOCATION_IDS = new Set(largeWarehouse.locations.map((l) => l.id));
 
-/** Cross-checks persisted completed ids against the current 100-location fixture -- an id from a since-removed/renamed location must never resurrect as "completed". */
-function sanitizeCompletedIds(ids: string[]): NodeId[] {
+/** Cross-checks persisted ids against the current 100-location fixture -- an id from a since-removed/renamed location must never resurrect as "completed", "selected", or part of the manual route. */
+function sanitizeKnownIds(ids: string[]): NodeId[] {
   return ids.filter((id) => KNOWN_LOCATION_IDS.has(id));
+}
+
+/**
+ * Restores the manual route's stop order, but only for ids that are both
+ * known to the fixture and present in the restored selection -- the manual
+ * route's stop set must always be a subset of today's targets, the same
+ * invariant `toggleSelected` enforces during live editing. Also de-dupes,
+ * since storage could in principle contain a stale/tampered duplicate.
+ */
+function sanitizeManualRouteStopIds(ids: string[], selectedIds: ReadonlySet<NodeId>): NodeId[] {
+  const seen = new Set<NodeId>();
+  const result: NodeId[] = [];
+  for (const id of sanitizeKnownIds(ids)) {
+    if (selectedIds.has(id) && !seen.has(id)) {
+      seen.add(id);
+      result.push(id);
+    }
+  }
+  return result;
 }
 
 interface ManualRouteData {
@@ -77,25 +96,55 @@ function computeWorkflowStep(selectedCount: number, manualStopCount: number): Wo
 function Dashboard({ persisted }: { persisted: PersistedState }) {
   const { t } = useTranslation();
 
-  const [selected, setSelected] = useState<Set<NodeId>>(new Set());
+  const [selected, setSelected] = useState<Set<NodeId>>(
+    () => new Set(sanitizeKnownIds(persisted.selectedIds)),
+  );
   const [completedIds, setCompletedIds] = useState<Set<NodeId>>(
-    () => new Set(sanitizeCompletedIds(persisted.completedIds)),
+    () => new Set(sanitizeKnownIds(persisted.completedIds)),
   );
   const [targetCount, setTargetCount] = useState(persisted.targetCount);
   const [walkingSpeed, setWalkingSpeed] = useState(persisted.walkingSpeed);
   const [search, setSearch] = useState("");
   const [zone, setZone] = useState("");
-  const [comparisonRequested, setComparisonRequested] = useState(false);
+  const [comparisonRequested, setComparisonRequested] = useState(persisted.comparisonRequested);
   const [routeVisibility, setRouteVisibility] = useState<RouteVisibility>("both");
-  const manualRoute = useManualRoute();
+  const manualRoute = useManualRoute(
+    sanitizeManualRouteStopIds(persisted.manualRouteStopIds, new Set(sanitizeKnownIds(persisted.selectedIds))),
+  );
   const routeEditorRef = useRef<HTMLDivElement>(null);
 
   // Any edit to the manual route invalidates a previously generated
   // comparison -- the worker must explicitly re-generate it, so the
-  // comparison panel never silently shows stale results.
+  // comparison panel never silently shows stale results. Skipped on the
+  // mount-triggered run so a restored comparisonRequested (from a route
+  // restored via localStorage) isn't immediately wiped out again.
+  const isFirstRender = useRef(true);
   useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
     setComparisonRequested(false);
   }, [manualRoute.stopIds]);
+
+  // Single source of truth for persistence: every field that should survive
+  // a reload is written here whenever it changes, instead of scattered
+  // per-mutation calls -- the previous per-mutation approach is exactly how
+  // `selected`/manual-route/comparison state ended up never being wired to
+  // storage in the first place. `language` is re-read fresh from storage
+  // rather than trusted from the `persisted` prop (captured once at mount)
+  // so a live language switch is never clobbered by this effect.
+  useEffect(() => {
+    savePersistedState(window.localStorage, {
+      targetCount,
+      completedIds: [...completedIds],
+      language: loadPersistedState(window.localStorage).language,
+      walkingSpeed,
+      selectedIds: [...selected],
+      manualRouteStopIds: manualRoute.stopIds,
+      comparisonRequested,
+    });
+  }, [selected, completedIds, targetCount, walkingSpeed, manualRoute.stopIds, comparisonRequested]);
 
   const labels = useMemo(() => {
     const map = new Map<NodeId, string>();
@@ -126,16 +175,6 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
 
   const currentStep = computeWorkflowStep(selected.size, manualRoute.stopIds.length);
 
-  function persist(next: Partial<PersistedState>) {
-    savePersistedState(window.localStorage, {
-      targetCount,
-      completedIds: [...completedIds],
-      language: persisted.language,
-      walkingSpeed,
-      ...next,
-    });
-  }
-
   function toggleSelected(id: NodeId) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -156,7 +195,6 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
     setCompletedIds((prev) => {
       const next = new Set(prev);
       selected.forEach((id) => next.add(id));
-      persist({ completedIds: [...next] });
       return next;
     });
   }
@@ -165,7 +203,6 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
     setCompletedIds((prev) => {
       const next = new Set(prev);
       selected.forEach((id) => next.delete(id));
-      persist({ completedIds: [...next] });
       return next;
     });
   }
@@ -184,10 +221,7 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
         manual={manualComputation}
         recommended={recommendedComputation}
         walkingSpeed={walkingSpeed}
-        onWalkingSpeedChange={(speed) => {
-          setWalkingSpeed(speed);
-          persist({ walkingSpeed: speed });
-        }}
+        onWalkingSpeedChange={setWalkingSpeed}
         manualStopCount={manualRoute.stopIds.length}
         comparisonRequested={comparisonRequested}
         routeVisibility={routeVisibility}
@@ -198,10 +232,7 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
         targetCount={targetCount}
         completedIds={completedIds}
         selectedIds={selected}
-        onTargetCountChange={(count) => {
-          setTargetCount(count);
-          persist({ targetCount: count });
-        }}
+        onTargetCountChange={setTargetCount}
         onMarkSelectedComplete={markSelectedComplete}
         onUndoSelectedCompletion={undoSelectedCompletion}
       />
