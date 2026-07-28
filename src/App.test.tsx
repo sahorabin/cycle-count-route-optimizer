@@ -1,152 +1,183 @@
 // @vitest-environment jsdom
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import App from "./App";
-import { sampleWarehouse } from "./data/sampleWarehouse";
 
-describe("App", () => {
-  // 1. default target selection produces both route results
-  test("shows both route results for the default selection", () => {
+beforeEach(() => {
+  window.localStorage.clear();
+});
+
+function selectLocation(label: string) {
+  fireEvent.click(screen.getByRole("checkbox", { name: new RegExp(label) }));
+}
+
+function clickOnMap(label: string) {
+  fireEvent.click(screen.getByRole("button", { name: label }));
+}
+
+describe("App (Phase 5 dashboard)", () => {
+  test("defaults to Korean and shows all 100 locations available for selection", () => {
     render(<App />);
-
-    expect(screen.getByText("Nearest Neighbor")).toBeTruthy();
-    expect(screen.getByText("2-opt Optimized")).toBeTruthy();
-    // Hand/script-verified for all 4 sample targets: NN=539, 2-opt=459.
-    expect(screen.getByText(/539/)).toBeTruthy();
-    expect(screen.getByText(/459/)).toBeTruthy();
+    expect(screen.getByText("100개 중 0개 선택됨")).toBeTruthy();
   });
 
-  // 2. target selection changes recompute both routes
-  test("recomputes both routes when a target is deselected", () => {
+  test("switching to English updates the selector count text", () => {
     render(<App />);
-    expect(screen.getByText(/539/)).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("checkbox", { name: /Bin A3-Back/ }));
-
-    expect(screen.queryByText(/539/)).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    expect(screen.getByText("0 of 100 selected")).toBeTruthy();
   });
 
-  // 3. zero-target selection produces safe output
-  test("shows a safe, useful empty state with zero targets selected, no crash", () => {
+  test("shows a step-1 instruction to select locations, not the route-comparison heading, at the initial state", () => {
     render(<App />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
-
-    expect(
-      screen.getByText(/Select at least one cycle-count location to see a route comparison/),
-    ).toBeTruthy();
-    expect(screen.queryByText("Nearest Neighbor")).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    expect(screen.getByText("Select today's count locations")).toBeTruthy();
+    expect(screen.queryByText("Route comparison")).toBeNull();
   });
 
-  // 4. Select all and Clear all work
-  test("Select all and Clear all toggle every checkbox", () => {
+  test("clicking an available (unselected) location on the map does nothing -- only selected locations are clickable", () => {
     render(<App />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
-    for (const location of sampleWarehouse.locations) {
-      expect(
-        (screen.getByRole("checkbox", { name: new RegExp(location.label) }) as HTMLInputElement)
-          .checked,
-      ).toBe(false);
-    }
-
-    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
-    for (const location of sampleWarehouse.locations) {
-      expect(
-        (screen.getByRole("checkbox", { name: new RegExp(location.label) }) as HTMLInputElement)
-          .checked,
-      ).toBe(true);
-    }
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    // Not selected yet: no accessible "button" role for this location.
+    expect(screen.queryByRole("button", { name: "Zone A - Bin 01" })).toBeNull();
   });
 
-  // 5. displayed total distances match the domain results
-  test("displayed totals for a smaller selection match the domain result exactly", () => {
+  test("selecting locations, building a route, and generating a comparison shows Worker vs System Recommended", () => {
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /Bin A2-Mid/ }));
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
 
-    // office -> loc-B is a single-leg route: 77 (hand-verified in Phase 1/2 tests).
-    const totals = screen.getAllByText(/77/);
-    expect(totals.length).toBeGreaterThan(0);
+    selectLocation("Zone A - Bin 01");
+    selectLocation("Zone A - Bin 02");
+
+    clickOnMap("Zone A - Bin 01");
+    clickOnMap("Zone A - Bin 02");
+
+    fireEvent.click(screen.getByRole("button", { name: "Generate recommended route" }));
+
+    expect(screen.getAllByText("Worker route").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("System recommended route").length).toBeGreaterThan(0);
+    expect(document.querySelector(".comparison-hero__summary")).not.toBeNull();
+
+    // Two adjacent stops have only one possible visit order, so the
+    // recommended route can never beat the worker's -- this is the
+    // zero-savings correctness case: no "saved"/improvement claim allowed.
+    expect(document.querySelector(".comparison-hero__summary")!.textContent).toBe(
+      "Both routes cover the same distance",
+    );
+    expect(document.querySelector(".comparison-hero__summary")!.textContent).not.toMatch(/saved/);
   });
 
-  // 6. improvement percentage handles zero distance
-  test("shows 0.0% improvement rather than NaN/Infinity for a single-target (zero-saving) route", () => {
+  test("editing the route after generating a comparison hides it again until re-generated", () => {
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /Bin A2-Mid/ }));
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
 
-    expect(screen.getByText("0.0%")).toBeTruthy();
-    expect(screen.queryByText(/NaN/)).toBeNull();
-    expect(screen.queryByText(/Infinity/)).toBeNull();
+    selectLocation("Zone A - Bin 01");
+    selectLocation("Zone A - Bin 02");
+    clickOnMap("Zone A - Bin 01");
+    clickOnMap("Zone A - Bin 02");
+    fireEvent.click(screen.getByRole("button", { name: "Generate recommended route" }));
+    expect(screen.getAllByText("Worker route").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]);
+
+    // Back below 2 stops -- step 2's "build the visit order" instruction, not
+    // the comparison hero at all, and definitely not stale comparison output.
+    expect(screen.getByText("Build the worker visit order")).toBeTruthy();
+    expect(document.querySelector(".comparison-hero__summary")).toBeNull();
   });
 
-  // 10. UI route order contains only office and selected cycle-count locations
-  test("route stop lists contain only the office and selected locations, never raw aisle-node ids", () => {
+  test("deselecting a location that is already in the route removes it from the route too", () => {
     render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
 
+    selectLocation("Zone A - Bin 01");
+    clickOnMap("Zone A - Bin 01");
+    expect(document.querySelector('[data-location-id="loc-A01"]')!.getAttribute("data-state")).toBe(
+      "route",
+    );
+
+    selectLocation("Zone A - Bin 01"); // uncheck
+    expect(document.querySelector('[data-location-id="loc-A01"]')!.getAttribute("data-state")).toBe(
+      "available",
+    );
+  });
+
+  test("the system recommended route always covers the exact same targets as the manual route", () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+
+    selectLocation("Zone A - Bin 01");
+    selectLocation("Zone C - Bin 05");
+    selectLocation("Zone B - Bin 09");
+    clickOnMap("Zone A - Bin 01");
+    clickOnMap("Zone C - Bin 05");
+    clickOnMap("Zone B - Bin 09");
+
+    const technicalSummary = screen.getByText("Technical details (Nearest Neighbor vs Optimized Heuristic)");
+    fireEvent.click(technicalSummary);
     const stopLists = document.querySelectorAll(".route-summary__stops");
     expect(stopLists.length).toBe(2);
     for (const list of stopLists) {
-      for (const aisleNode of sampleWarehouse.aisleNodes) {
-        expect(list.textContent).not.toContain(aisleNode.id);
-      }
+      expect(list.textContent).toContain("Zone A - Bin 01");
+      expect(list.textContent).toContain("Zone C - Bin 05");
+      expect(list.textContent).toContain("Zone B - Bin 09");
     }
   });
 
-  // 11. intermediate aisle nodes appear only in the drawn route path (map), not in the stop lists
-  test("aisle nodes are drawn on the map but never listed as stops", () => {
+  test("shows a workflow step indicator that advances as the worker progresses", () => {
     render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
 
-    const aisleNodeCircles = document.querySelectorAll(".warehouse-map__aisle-node");
-    expect(aisleNodeCircles.length).toBe(sampleWarehouse.aisleNodes.length);
+    const steps = () => screen.getAllByRole("listitem").filter((el) => el.className.includes("workflow-steps__item"));
+    expect(steps()[0].getAttribute("aria-current")).toBe("step");
+
+    selectLocation("Zone A - Bin 01");
+    expect(steps()[1].getAttribute("aria-current")).toBe("step");
+
+    selectLocation("Zone A - Bin 02");
+    clickOnMap("Zone A - Bin 01");
+    clickOnMap("Zone A - Bin 02");
+    expect(steps()[2].getAttribute("aria-current")).toBe("step");
   });
 
-  // 9. no return-to-office segment is rendered / 7 route stop begins at the office
-  test("both route stop lists start at the office and never list it again after the first stop", () => {
+  test("today's progress panel is present and starts at the default target", () => {
     render(<App />);
-
-    const stopLists = document.querySelectorAll(".route-summary__stops");
-    for (const list of stopLists) {
-      const items = Array.from(list.querySelectorAll("li")).map((li) => li.textContent);
-      expect(items[0]).toContain("start");
-      expect(items.slice(1).some((text) => text?.includes("start"))).toBe(false);
-    }
+    expect(screen.getByText("오늘의 진행 상황")).toBeTruthy();
   });
 
-  // 13. Nearest Neighbor and 2-opt results are visually distinguishable
-  test("draws the two routes with different line styles and different stop-marker shapes", () => {
+  test("marking a selected location complete updates the map marker state", () => {
     render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    selectLocation("Zone A - Bin 01");
+    fireEvent.click(screen.getByRole("button", { name: "Mark selected complete" }));
 
-    const nnLine = document.querySelector('[data-route="nearest-neighbor"].warehouse-map__route');
-    const optLine = document.querySelector('[data-route="two-opt"].warehouse-map__route');
-    expect(nnLine).not.toBeNull();
-    expect(optLine).not.toBeNull();
-
-    expect(document.querySelectorAll(".warehouse-map__stop--nn circle").length).toBeGreaterThan(0);
-    expect(document.querySelectorAll(".warehouse-map__stop--opt rect").length).toBeGreaterThan(0);
+    expect(
+      document.querySelector('[data-location-id="loc-A01"]')!.getAttribute("data-state"),
+    ).toBe("completed");
   });
 
-  // 14. the optimized distance is never displayed as greater than the baseline
-  test("the displayed optimized total is never greater than the displayed Nearest Neighbor total", () => {
+  test("persists language choice across remounts via localStorage", () => {
+    const { unmount } = render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    unmount();
     render(<App />);
-
-    const nnArticle = document.querySelector('[data-route="nearest-neighbor"].route-summary__route');
-    const optArticle = document.querySelector('[data-route="two-opt"].route-summary__route');
-    const nnTotal = Number(nnArticle!.querySelector("strong")!.textContent);
-    const optTotal = Number(optArticle!.querySelector("strong")!.textContent);
-
-    expect(optTotal).toBeLessThanOrEqual(nnTotal);
+    expect(screen.getByText("0 of 100 selected")).toBeTruthy();
   });
 
-  // Accessible labels for the interactive controls.
-  test("selection controls have accessible names", () => {
+  test("ignores a completed-location id from localStorage that no longer exists in the fixture", () => {
+    window.localStorage.setItem(
+      "cycle-count-route-optimizer:v1",
+      JSON.stringify({
+        targetCount: 10,
+        completedIds: ["loc-Z99", "loc-A01"],
+        language: "en",
+        walkingSpeed: 60,
+      }),
+    );
     render(<App />);
-
-    expect(screen.getByRole("button", { name: "Select all" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Clear all" })).toBeTruthy();
-    for (const location of sampleWarehouse.locations) {
-      expect(screen.getByRole("checkbox", { name: new RegExp(location.label) })).toBeTruthy();
-    }
+    expect(
+      document.querySelector('[data-location-id="loc-A01"]')!.getAttribute("data-state"),
+    ).toBe("completed");
+    const progressPanel = screen.getByText("Today's progress").closest("section")!;
+    expect(progressPanel.querySelector(".progress-panel__stats dd")!.textContent).toBe("1");
   });
 });

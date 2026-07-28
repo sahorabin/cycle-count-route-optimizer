@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { render } from "@testing-library/react";
-import { WarehouseMap } from "./WarehouseMap";
+import { fireEvent } from "@testing-library/react";
+import { WarehouseMap, type RouteVisibility } from "./WarehouseMap";
 import { buildValidatedDistanceMatrix } from "../domain/distanceMatrix";
 import { nearestNeighborRoute } from "../domain/nearestNeighbor";
 import { twoOptRoute } from "../domain/twoOpt";
 import { sampleWarehouse } from "../data/sampleWarehouse";
-import type { WarehouseGraph } from "../domain/types";
+import type { NodeId, WarehouseGraph } from "../domain/types";
 import { expandRoutePath } from "../ui/routePath";
 import { buildCoordinateLookup, NN_OFFSET, OPT_OFFSET, pointsAttribute } from "../ui/svgPoints";
+import { LanguageProvider } from "../i18n/LanguageContext";
 
 function routeGraphFor(targetIds: string[]): WarehouseGraph {
   return {
@@ -19,23 +21,38 @@ function routeGraphFor(targetIds: string[]): WarehouseGraph {
 
 function computeRoutes(targetIds: string[]) {
   const { visitIds, pathMatrix } = buildValidatedDistanceMatrix(routeGraphFor(targetIds));
-  const nn = nearestNeighborRoute(sampleWarehouse, targetIds);
-  const twoOpt = twoOptRoute(sampleWarehouse, targetIds, nn);
-  return { visitIds, pathMatrix, nn, twoOpt };
+  const worker = nearestNeighborRoute(sampleWarehouse, targetIds);
+  const recommended = twoOptRoute(sampleWarehouse, targetIds, worker);
+  return { visitIds, pathMatrix, worker, recommended };
 }
 
-function setup(targetIds: string[], selected: Set<string>) {
-  const { visitIds, pathMatrix, nn, twoOpt } = computeRoutes(targetIds);
+interface SetupOverrides {
+  manualStopIds?: NodeId[];
+  completedIds?: Set<NodeId>;
+  searchMatchIds?: Set<NodeId>;
+  routeVisibility?: RouteVisibility;
+  onLocationClick?: (id: NodeId) => void;
+}
+
+function setup(targetIds: string[], selected: Set<string>, overrides: SetupOverrides = {}) {
+  const { visitIds, pathMatrix, worker, recommended } = computeRoutes(targetIds);
 
   return render(
-    <WarehouseMap
-      graph={sampleWarehouse}
-      selected={selected}
-      visitIds={visitIds}
-      pathMatrix={pathMatrix}
-      nearestNeighbor={nn}
-      optimized={twoOpt}
-    />,
+    <LanguageProvider initialLanguage="en">
+      <WarehouseMap
+        graph={sampleWarehouse}
+        selected={selected}
+        visitIds={visitIds}
+        pathMatrix={pathMatrix}
+        workerRoute={worker}
+        recommendedRoute={recommended}
+        routeVisibility={overrides.routeVisibility ?? "both"}
+        manualStopIds={overrides.manualStopIds ?? []}
+        completedIds={overrides.completedIds ?? new Set()}
+        searchMatchIds={overrides.searchMatchIds ?? new Set()}
+        onLocationClick={overrides.onLocationClick ?? (() => {})}
+      />
+    </LanguageProvider>,
   );
 }
 
@@ -46,59 +63,47 @@ describe("WarehouseMap", () => {
       new Set(["loc-A", "loc-B", "loc-C", "loc-D"]),
     );
 
-    // Stable semantic selector: each route's line is independently addressable
-    // by a plain data attribute, not by a generated/hashed class name.
-    const nnLine = container.querySelector('[data-route="nearest-neighbor"]');
-    const optLine = container.querySelector('[data-route="two-opt"]');
-    expect(nnLine).not.toBeNull();
-    expect(optLine).not.toBeNull();
-    expect(nnLine).not.toBe(optLine);
-    expect(nnLine!.tagName).toBe("polyline");
-    expect(optLine!.tagName).toBe("polyline");
+    const workerLine = container.querySelector('[data-route="worker"]');
+    const recommendedLine = container.querySelector('[data-route="recommended"]');
+    expect(workerLine).not.toBeNull();
+    expect(recommendedLine).not.toBeNull();
+    expect(workerLine).not.toBe(recommendedLine);
+    expect(workerLine!.tagName).toBe("polyline");
+    expect(recommendedLine!.tagName).toBe("polyline");
 
-    // Distinct stroke presentation: each route carries its own author-defined
-    // (not generated/hashed) style class, so they never resolve to the same rule.
-    expect(nnLine!.getAttribute("class")).not.toBe(optLine!.getAttribute("class"));
+    expect(workerLine!.getAttribute("class")).not.toBe(recommendedLine!.getAttribute("class"));
 
-    // Optimized route's dash pattern is a real SVG presentation attribute, so it's
-    // directly inspectable here without needing to load or compute App.css.
-    expect(optLine!.getAttribute("stroke-dasharray")).toBe("3 2.2");
-    expect(nnLine!.getAttribute("stroke-dasharray")).toBeNull();
+    expect(recommendedLine!.getAttribute("stroke-dasharray")).toBe("3 2.2");
+    expect(workerLine!.getAttribute("stroke-dasharray")).toBeNull();
 
-    // Distinguishable by shape, not only by color: NN stops are circles, 2-opt stops are rects.
-    const nnStopShapes = container.querySelectorAll(".warehouse-map__stop--nn circle");
-    const optStopShapes = container.querySelectorAll(".warehouse-map__stop--opt rect");
-    expect(nnStopShapes.length).toBeGreaterThan(0);
-    expect(optStopShapes.length).toBeGreaterThan(0);
-    // And never cross-contaminated: an NN stop is never a rect, an opt stop never a circle.
-    expect(container.querySelectorAll(".warehouse-map__stop--nn rect").length).toBe(0);
-    expect(container.querySelectorAll(".warehouse-map__stop--opt circle").length).toBe(0);
+    // Distinguishable by shape, not only by color: worker stops are circles, recommended stops are rects.
+    const workerStopShapes = container.querySelectorAll(".warehouse-map__stop--worker circle");
+    const recommendedStopShapes = container.querySelectorAll(".warehouse-map__stop--recommended rect");
+    expect(workerStopShapes.length).toBeGreaterThan(0);
+    expect(recommendedStopShapes.length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".warehouse-map__stop--worker rect").length).toBe(0);
+    expect(container.querySelectorAll(".warehouse-map__stop--recommended circle").length).toBe(0);
   });
 
-  test("the rendered Nearest Neighbor polyline exactly matches the production-derived aisle path and never returns to the office", () => {
+  test("the rendered worker-route polyline exactly matches the production-derived aisle path and never returns to the office", () => {
     const targetIds = ["loc-D", "loc-C"];
-    const { visitIds, pathMatrix, nn } = computeRoutes(targetIds);
+    const { visitIds, pathMatrix, worker } = computeRoutes(targetIds);
     const { container } = setup(targetIds, new Set(targetIds));
 
-    // Derive the expected node sequence via the same production helper the
-    // component uses, from the route's own order -- not re-implemented here.
-    const expectedPath = expandRoutePath(nn.order, visitIds, pathMatrix);
+    const expectedPath = expandRoutePath(worker.order, visitIds, pathMatrix);
     const coords = buildCoordinateLookup(sampleWarehouse);
     const expectedPoints = pointsAttribute(expectedPath, coords, NN_OFFSET);
 
-    const nnLine = container.querySelector('[data-route="nearest-neighbor"]')!;
-    expect(nnLine.getAttribute("points")).toBe(expectedPoints);
+    const workerLine = container.querySelector('[data-route="worker"]')!;
+    expect(workerLine.getAttribute("points")).toBe(expectedPoints);
 
-    // The office appears exactly once in the expanded open path, at the very start.
     expect(expectedPath[0]).toBe(sampleWarehouse.start.id);
     expect(expectedPath.filter((id) => id === sampleWarehouse.start.id)).toHaveLength(1);
 
-    // The rendered line's last point is the final target's own display position --
-    // not a phantom segment back to the office's.
-    const finalTargetId = nn.order[nn.order.length - 1];
+    const finalTargetId = worker.order[worker.order.length - 1];
     const finalTargetPoint = coords.get(finalTargetId)!;
     const officePoint = coords.get(sampleWarehouse.start.id)!;
-    const renderedPoints = nnLine.getAttribute("points")!.split(" ");
+    const renderedPoints = workerLine.getAttribute("points")!.split(" ");
     const lastRenderedPoint = renderedPoints[renderedPoints.length - 1];
 
     expect(lastRenderedPoint).toBe(
@@ -107,25 +112,25 @@ describe("WarehouseMap", () => {
     expect(lastRenderedPoint).not.toBe(`${officePoint.x + NN_OFFSET.x},${officePoint.y + NN_OFFSET.y}`);
   });
 
-  test("the rendered 2-opt polyline exactly matches the production-derived aisle path and never returns to the office", () => {
+  test("the rendered recommended-route polyline exactly matches the production-derived aisle path and never returns to the office", () => {
     const targetIds = ["loc-D", "loc-C"];
-    const { visitIds, pathMatrix, twoOpt } = computeRoutes(targetIds);
+    const { visitIds, pathMatrix, recommended } = computeRoutes(targetIds);
     const { container } = setup(targetIds, new Set(targetIds));
 
-    const expectedPath = expandRoutePath(twoOpt.order, visitIds, pathMatrix);
+    const expectedPath = expandRoutePath(recommended.order, visitIds, pathMatrix);
     const coords = buildCoordinateLookup(sampleWarehouse);
     const expectedPoints = pointsAttribute(expectedPath, coords, OPT_OFFSET);
 
-    const optLine = container.querySelector('[data-route="two-opt"]')!;
-    expect(optLine.getAttribute("points")).toBe(expectedPoints);
+    const recommendedLine = container.querySelector('[data-route="recommended"]')!;
+    expect(recommendedLine.getAttribute("points")).toBe(expectedPoints);
 
     expect(expectedPath[0]).toBe(sampleWarehouse.start.id);
     expect(expectedPath.filter((id) => id === sampleWarehouse.start.id)).toHaveLength(1);
 
-    const finalTargetId = twoOpt.order[twoOpt.order.length - 1];
+    const finalTargetId = recommended.order[recommended.order.length - 1];
     const finalTargetPoint = coords.get(finalTargetId)!;
     const officePoint = coords.get(sampleWarehouse.start.id)!;
-    const renderedPoints = optLine.getAttribute("points")!.split(" ");
+    const renderedPoints = recommendedLine.getAttribute("points")!.split(" ");
     const lastRenderedPoint = renderedPoints[renderedPoints.length - 1];
 
     expect(lastRenderedPoint).toBe(
@@ -136,21 +141,155 @@ describe("WarehouseMap", () => {
     );
   });
 
-  test("marks selected and unselected locations distinctly", () => {
+  test("hiding the worker route via routeVisibility removes its polyline and stop markers but keeps the recommended route", () => {
+    const { container } = setup(["loc-A", "loc-B"], new Set(["loc-A", "loc-B"]), {
+      routeVisibility: "recommended",
+    });
+    expect(container.querySelector('[data-route="worker"]')).toBeNull();
+    expect(container.querySelectorAll(".warehouse-map__stop--worker").length).toBe(0);
+    expect(container.querySelector('[data-route="recommended"]')).not.toBeNull();
+  });
+
+  test("marks selected and available locations distinctly", () => {
     const { container } = setup(["loc-A"], new Set(["loc-A"]));
 
     const selectedNode = container.querySelector('[data-selected="true"]');
-    const unselectedNodes = container.querySelectorAll('[data-selected="false"]');
+    const availableNodes = container.querySelectorAll('[data-selected="false"]');
     expect(selectedNode).not.toBeNull();
-    expect(unselectedNodes.length).toBe(sampleWarehouse.locations.length - 1);
+    expect(availableNodes.length).toBe(sampleWarehouse.locations.length - 1);
   });
 
   test("renders no route line for a single-node (zero-target) route, without crashing", () => {
     const { container } = setup([], new Set());
 
-    expect(container.querySelector('[data-route="nearest-neighbor"]')).toBeNull();
-    expect(container.querySelector('[data-route="two-opt"]')).toBeNull();
-    // The office marker should still be present.
+    expect(container.querySelector('[data-route="worker"]')).toBeNull();
+    expect(container.querySelector('[data-route="recommended"]')).toBeNull();
     expect(container.textContent).toContain(sampleWarehouse.start.label);
+  });
+
+  test("clicking a selected (not-yet-routed) location's marker calls onLocationClick with its id", () => {
+    const onLocationClick = vi.fn();
+    const { container } = setup(["loc-A"], new Set(["loc-A"]), { onLocationClick });
+    fireEvent.click(container.querySelector('[data-location-id="loc-A"]')!);
+    expect(onLocationClick).toHaveBeenCalledWith("loc-A");
+  });
+
+  test("clicking an available (unselected) location does nothing -- selecting happens only in the target selector", () => {
+    const onLocationClick = vi.fn();
+    const { container } = setup([], new Set(), { onLocationClick });
+    fireEvent.click(container.querySelector('[data-location-id="loc-A"]')!);
+    expect(onLocationClick).not.toHaveBeenCalled();
+  });
+
+  test("an available location's label is hidden until hovered or focused", () => {
+    const { container } = setup([], new Set());
+    const group = container.querySelector('[data-location-id="loc-A"]')!;
+    expect(group.querySelector(".warehouse-map__location-label")).toBeNull();
+
+    fireEvent.mouseEnter(group);
+    expect(group.querySelector(".warehouse-map__location-label")).not.toBeNull();
+
+    fireEvent.mouseLeave(group);
+    expect(group.querySelector(".warehouse-map__location-label")).toBeNull();
+  });
+
+  test("a search-matched location's label is shown even when available and unhovered", () => {
+    const { container } = setup([], new Set(), { searchMatchIds: new Set(["loc-A"]) });
+    const group = container.querySelector('[data-location-id="loc-A"]')!;
+    expect(group.querySelector(".warehouse-map__location-label")).not.toBeNull();
+  });
+
+  test("completed locations carry a distinct data-state and render a checkmark, not the worker/recommended shapes", () => {
+    const { container } = setup(["loc-A"], new Set(["loc-A"]), {
+      completedIds: new Set(["loc-A"]),
+    });
+    const completedMarker = container.querySelector('[data-location-id="loc-A"]')!;
+    expect(completedMarker.getAttribute("data-state")).toBe("completed");
+    expect(completedMarker.querySelector(".warehouse-map__check")).not.toBeNull();
+    expect(container.querySelector('[data-location-id="loc-B"]')!.getAttribute("data-state")).toBe(
+      "available",
+    );
+  });
+
+  test("a location in the manual route reports state 'route' and carries its sequence number", () => {
+    const { container } = setup([], new Set(), { manualStopIds: ["loc-B", "loc-A"] });
+    expect(container.querySelector('[data-location-id="loc-B"]')!.getAttribute("data-state")).toBe(
+      "route",
+    );
+    expect(container.querySelector('[data-location-id="loc-B"] [data-sequence]')!.textContent).toBe(
+      "1",
+    );
+    expect(container.querySelector('[data-location-id="loc-A"] [data-sequence]')!.textContent).toBe(
+      "2",
+    );
+    expect(
+      container.querySelector('[data-location-id="loc-B"] .warehouse-map__location-label'),
+    ).not.toBeNull();
+  });
+
+  test("renders a rack rectangle for each aisle, behind the location markers", () => {
+    const { container } = setup([], new Set());
+    const racks = container.querySelectorAll(".warehouse-map__rack");
+    expect(racks.length).toBeGreaterThan(0);
+  });
+
+  test("does not render the raw aisle-node routing graph -- only racks, office, bins, and route lines", () => {
+    const { container } = setup([], new Set());
+    expect(container.querySelectorAll(".warehouse-map__aisle-edge").length).toBe(0);
+    expect(container.querySelector(".warehouse-map__aisles")).toBeNull();
+  });
+
+  test("provides a scrollable viewport wrapper and a view-full-warehouse toggle for narrow screens", () => {
+    const { container } = setup([], new Set());
+    expect(container.querySelector(".warehouse-map__viewport")).not.toBeNull();
+    const toggle = container.querySelector(".warehouse-map__zoom-toggle")!;
+    expect(toggle.textContent).toBe("View full warehouse");
+    fireEvent.click(toggle);
+    expect(toggle.textContent).toBe("Zoom to selection");
+  });
+
+  test("the svg's aspect ratio is derived from its own viewBox, not a fixed portrait/landscape guess", () => {
+    const { container } = setup([], new Set());
+    const svg = container.querySelector(".warehouse-map__svg") as HTMLElement;
+    const viewBox = svg.getAttribute("viewBox")!.split(" ").map(Number);
+    expect(svg.style.aspectRatio).toBe(`${viewBox[2]} / ${viewBox[3]}`);
+  });
+
+  test("shows a route-line legend, separate from the location-state legend, once routes are drawn", () => {
+    const { container } = setup(["loc-A", "loc-B"], new Set(["loc-A", "loc-B"]));
+    const routeLegend = container.querySelector(".warehouse-map__route-legend")!;
+    expect(routeLegend).not.toBeNull();
+    expect(routeLegend.textContent).toContain("Worker Route (solid line)");
+    expect(routeLegend.textContent).toContain("Recommended Route (dashed line)");
+    expect(routeLegend.textContent).toContain("Numbers show the visit order.");
+    // Kept out of the location-state legend entirely.
+    const locationLegend = container.querySelector('[aria-label="Map legend"]')!;
+    expect(locationLegend.textContent).not.toContain("Worker Route");
+  });
+
+  test("hides the route-line legend when no route is drawn yet", () => {
+    const { container } = setup([], new Set());
+    expect(container.querySelector(".warehouse-map__route-legend")).toBeNull();
+  });
+
+  test("only lists the currently visible route in the legend when one route is hidden via routeVisibility", () => {
+    const { container } = setup(["loc-A", "loc-B"], new Set(["loc-A", "loc-B"]), {
+      routeVisibility: "worker",
+    });
+    const routeLegend = container.querySelector(".warehouse-map__route-legend")!;
+    expect(routeLegend.textContent).toContain("Worker Route (solid line)");
+    expect(routeLegend.textContent).not.toContain("Recommended Route");
+  });
+
+  test("shows a secondary swipe-to-pan hint for the mobile map viewport", () => {
+    const { container } = setup([], new Set());
+    const hint = container.querySelector(".warehouse-map__mobile-hint")!;
+    expect(hint.textContent).toBe("Swipe horizontally to view other zones.");
+  });
+
+  test("hides the swipe hint once the worker has switched to the full-warehouse view", () => {
+    const { container } = setup([], new Set());
+    fireEvent.click(container.querySelector(".warehouse-map__zoom-toggle")!);
+    expect(container.querySelector(".warehouse-map__mobile-hint")).toBeNull();
   });
 });

@@ -1,35 +1,156 @@
 .app {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: var(--space-4);
+}
+
+/* No motion that could obscure a side-by-side comparison. */
+.app,
+.app * {
+  animation: none !important;
+  transition: none !important;
+}
+
+/*
+ * One consistent baseline for every text/number input, select, and button
+ * in the dashboard, so controls form a coherent interface instead of each
+ * component inventing its own browser-default look. Components layer
+ * layout (flex/grid, gaps) on top; they must not redeclare height/padding/
+ * border/radius themselves.
+ */
+.app input[type="text"],
+.app input[type="number"],
+.app select {
+  height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text-h);
+  font: inherit;
+}
+.app button {
+  height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text-h);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.app button:hover:not(:disabled) {
+  border-color: var(--target-selected);
+}
+.app button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.app__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+/* Workflow steps -- a single-page indicator, not separate pages. */
+.workflow-steps {
+  display: flex;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex-wrap: wrap;
+}
+.workflow-steps__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.workflow-steps__item--current {
+  border-color: var(--target-selected);
+  color: var(--text-h);
+  font-weight: 600;
+}
+.workflow-steps__number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--text-h);
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.workflow-steps__item--current .workflow-steps__number {
+  background: var(--target-selected);
+  color: #fff;
 }
 
 .app__subtitle {
   color: var(--text-muted);
-  margin-top: 6px;
+  margin-top: var(--space-1);
   max-width: 62ch;
 }
 
+/* The visit-order editor is a primary task, not secondary content below a
+   tall map -- on desktop it sits beside the map rather than under it, so
+   the ordered list and "Generate recommended route" stay visible without
+   scrolling past the whole map first. */
 .app__main {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 280px minmax(0, 1.2fr) minmax(280px, 360px);
   grid-template-areas:
-    "selector map"
-    "selector summary";
-  gap: 20px;
+    "selector map editor"
+    "selector technical technical";
+  gap: var(--space-4);
   align-items: start;
 }
 
+/* min-width: 0 overrides the grid item default of min-width: auto, which
+   would otherwise let the mobile map's intrinsic (zoomed, wider-than-
+   viewport) content size force the whole grid track -- and with it #root
+   and body -- wider than the viewport instead of staying clipped inside
+   .warehouse-map__viewport's own horizontal scroller. */
+.target-selector,
+.warehouse-map,
+.manual-route-editor,
+.technical-details {
+  min-width: 0;
+}
 .target-selector {
   grid-area: selector;
 }
 .warehouse-map {
   grid-area: map;
 }
-.route-summary,
-.app__empty-state,
-.app__error {
-  grid-area: summary;
+.manual-route-editor {
+  grid-area: editor;
+}
+.technical-details {
+  grid-area: technical;
+}
+
+@media (max-width: 1100px) {
+  .app__main {
+    grid-template-columns: 260px 1fr;
+    grid-template-areas:
+      "selector map"
+      "selector editor"
+      "selector technical";
+  }
 }
 
 @media (max-width: 860px) {
@@ -38,61 +159,71 @@
     grid-template-areas:
       "selector"
       "map"
-      "summary";
+      "editor"
+      "technical";
   }
 }
 
 .target-selector,
 .warehouse-map,
-.route-summary,
-.app__empty-state,
-.app__error {
+.manual-route-editor,
+.progress-panel,
+.comparison-hero,
+.technical-details,
+.route-summary {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 16px;
-}
-
-.app__empty-state {
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 100px;
-  text-align: center;
-}
-
-.app__error {
-  color: var(--danger);
-  background: var(--danger-bg);
-  border-color: var(--danger);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
 }
 
 /* Target selector */
 .target-selector {
   margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 .target-selector legend {
   font-weight: 600;
   color: var(--text-h);
   padding: 0 2px;
+  margin-bottom: var(--space-1);
 }
+/* Filters: search + zone, side by side when there's room, each with a sensible minimum width. */
+.target-selector__filters {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(120px, 1fr);
+  gap: var(--space-2);
+}
+.target-selector__search,
+.target-selector__zone {
+  width: 100%;
+}
+/* Bulk actions: a separate row from the filters. Buttons size to their own
+   label (never shrink into vertical text) and wrap as whole units onto a
+   new line if the sidebar is too narrow to fit them all on one row. */
 .target-selector__actions {
   display: flex;
-  gap: 8px;
-  margin: 8px 0 12px;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 .target-selector__actions button {
-  flex: 1;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text-h);
-  cursor: pointer;
+  flex: 0 1 auto;
+  width: auto;
 }
-.target-selector__actions button:hover {
-  border-color: var(--target-selected);
+.target-selector__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  white-space: nowrap;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-h);
 }
 .target-selector__list {
   list-style: none;
@@ -101,13 +232,16 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .target-selector__list label {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 7px 8px;
-  border-radius: 6px;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius);
   cursor: pointer;
 }
 .target-selector__list label:hover {
@@ -117,43 +251,173 @@
   color: var(--text-h);
   font-size: 14px;
 }
-.target-selector__id {
-  color: var(--text-muted);
-  font-family: var(--mono);
-  font-size: 12px;
-}
 .target-selector__count {
-  margin-top: 12px;
   color: var(--text-muted);
   font-size: 13px;
 }
+.target-selector__explain {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0;
+}
 
-/* Warehouse map */
+/* Selected tray: a compact summary distinct from the full scrollable list. */
+.target-selector__tray {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.target-selector__tray-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.target-selector__tray-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0;
+}
+/* Collapsed to a small fixed count of chips by default (see
+   TRAY_COLLAPSED_LIMIT) -- that count is chosen to fit without its own
+   scroll, so nothing looks accidentally clipped. Expanding to show every
+   selected location (--expanded) caps growth with its own bounded,
+   explicitly-scrollable region instead of pushing the rest of the
+   workflow down the page. */
+.target-selector__tray-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.target-selector__tray-chips--expanded {
+  max-height: 160px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.target-selector__tray-toggle {
+  align-self: flex-start;
+  height: auto;
+  padding: var(--space-1) var(--space-2);
+  font-size: 12px;
+  color: var(--target-selected);
+  background: transparent;
+  border-color: transparent;
+}
+.target-selector__tray-toggle:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.target-selector__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: var(--target-selected-bg);
+  color: var(--target-selected);
+  border-radius: 999px;
+  padding: var(--space-1) var(--space-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.target-selector__tray .target-selector__chip-remove {
+  height: auto;
+  width: auto;
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1;
+}
+.target-selector__continue {
+  align-self: flex-start;
+  background: var(--target-selected);
+  border-color: var(--target-selected);
+  color: #fff;
+}
+
+/* Warehouse map -- rendered as a floor plan: solid rack blocks with the
+   walkable aisles as the empty corridors between them, not a bare node
+   graph. The routing graph itself (aisle nodes/edges) is never drawn --
+   only racks, office, bin markers, and the worker/recommended route lines
+   traced over the aisle-node coordinates. */
+.warehouse-map {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.warehouse-map__zoom-toggle {
+  display: none;
+  align-self: flex-start;
+}
+/* Secondary, quiet instruction -- never competes with the zoom-toggle
+   button or the map itself. Only relevant (and only shown) once the mobile
+   zoomed/scrollable map layout is active. */
+.warehouse-map__mobile-hint {
+  display: none;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.warehouse-map__viewport {
+  width: 100%;
+}
+/* The svg's aspect-ratio is set inline per-render from the actual viewBox
+   (see WarehouseMap.tsx) so the rendered box always matches the real
+   warehouse geometry -- no letterboxing, no distortion. */
 .warehouse-map__svg {
   width: 100%;
   height: auto;
-  aspect-ratio: 4 / 5;
+  max-height: 420px;
   display: block;
   background: var(--bg);
   border-radius: 6px;
 }
-.warehouse-map__aisle-edge {
-  stroke: var(--aisle);
-  stroke-width: 1.6;
+.warehouse-map__rack {
+  fill: var(--rack);
+  stroke: var(--border);
+  stroke-width: 0.4;
 }
-.warehouse-map__aisle-node {
-  fill: var(--aisle-node);
+
+/* Mobile: default to a zoomed-in, horizontally scrollable floor plan
+   instead of shrinking the whole warehouse to fit 375px -- markers,
+   sequence numbers, and route lines stay a legible size. "View full
+   warehouse" (the zoom-toggle button) swaps in the desktop fit-to-width
+   rendering; the scrollbar lives inside the viewport, never the page. */
+@media (max-width: 640px) {
+  .warehouse-map__zoom-toggle {
+    display: inline-flex;
+  }
+  .warehouse-map__mobile-hint {
+    display: block;
+  }
+  .warehouse-map__viewport {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    border-radius: 6px;
+  }
+  .warehouse-map__svg--zoomed {
+    width: auto;
+    height: 380px;
+    max-height: none;
+  }
 }
+
 .warehouse-map__route {
   fill: none;
   stroke-width: 1.4;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.warehouse-map__route--nn {
+.warehouse-map__route--worker {
   stroke: var(--route-nn);
 }
-.warehouse-map__route--opt {
+.warehouse-map__route--recommended {
   stroke: var(--route-opt);
   stroke-dasharray: 3 2.2;
 }
@@ -162,10 +426,10 @@
   stroke: var(--surface);
   stroke-width: 0.4;
 }
-.warehouse-map__stop--nn circle {
+.warehouse-map__stop--worker circle {
   fill: var(--route-nn);
 }
-.warehouse-map__stop--opt rect {
+.warehouse-map__stop--recommended rect {
   fill: var(--route-opt);
 }
 .warehouse-map__stop text {
@@ -177,25 +441,71 @@
 .warehouse-map__location circle {
   stroke-width: 0.6;
 }
+.warehouse-map__location--selected {
+  cursor: pointer;
+}
+.warehouse-map__location:focus-visible {
+  outline: 2px solid var(--target-selected);
+  outline-offset: 1px;
+}
+/* Available: hollow circle -- informational only, not clickable. */
+.warehouse-map__location--available circle {
+  fill: var(--surface);
+  stroke: var(--target-unselected);
+}
+/* Selected for today: filled circle, clickable to assign visit order. */
 .warehouse-map__location--selected circle {
   fill: var(--target-selected);
   stroke: var(--target-selected);
 }
-.warehouse-map__location--unselected circle {
-  fill: var(--surface);
-  stroke: var(--target-unselected);
+/* In the visit order: same fill as selected, plus its sequence number
+   badge -- the number itself is the primary differentiator (see
+   .warehouse-map__sequence), so this state never depends on color alone. */
+.warehouse-map__location--route circle {
+  fill: var(--target-selected);
+  stroke: var(--text-h);
+  stroke-width: 1;
+}
+/* Completed: a compact filled circle with a checkmark glyph, in a color
+   distinct from both route lines -- never an oversized/starburst marker. */
+.warehouse-map__location--completed circle {
+  fill: var(--done);
+  stroke: var(--done);
+}
+.warehouse-map__check {
+  stroke: #fff;
+  stroke-width: 0.7;
+  pointer-events: none;
+}
+/* Search match: a visible ring so a found location stands out even while available. */
+.warehouse-map__location--match circle {
+  stroke: var(--target-selected);
+  stroke-width: 1;
 }
 .warehouse-map__location-label {
   font-size: 3px;
   fill: var(--text-h);
   text-anchor: middle;
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 0.6;
+  pointer-events: none;
+}
+.warehouse-map__sequence {
+  font-size: 2.4px;
+  font-weight: 700;
+  fill: #fff;
+  text-anchor: middle;
+  pointer-events: none;
 }
 .warehouse-map__office rect {
   fill: var(--office);
+  stroke: var(--surface);
+  stroke-width: 0.6;
 }
 .warehouse-map__office-label {
-  font-size: 3px;
-  font-weight: 600;
+  font-size: 3.2px;
+  font-weight: 700;
   fill: var(--text-h);
   text-anchor: middle;
 }
@@ -225,21 +535,45 @@
 .warehouse-map__swatch--office {
   background: var(--office);
 }
-.warehouse-map__swatch--aisle {
-  background: var(--aisle);
-}
 .warehouse-map__swatch--selected {
   background: var(--target-selected);
+  border-radius: 50%;
 }
-.warehouse-map__swatch--unselected {
+.warehouse-map__swatch--pending {
   background: var(--surface);
   border: 2px solid var(--target-unselected);
+  border-radius: 50%;
 }
-.warehouse-map__swatch--nn-line {
+.warehouse-map__swatch--completed {
+  background: var(--done);
+  border-radius: 50%;
+}
+.warehouse-map__swatch--manual-stop {
+  background: var(--target-selected);
+  border: 2px solid var(--text-h);
+  border-radius: 50%;
+}
+.warehouse-map__swatch--worker-line {
   background: var(--route-nn);
+  border-radius: 2px;
 }
-.warehouse-map__swatch--opt-line {
+.warehouse-map__swatch--recommended-line {
   background: repeating-linear-gradient(90deg, var(--route-opt) 0 4px, transparent 4px 7px);
+  border-radius: 2px;
+}
+
+/* Route-line legend -- kept visually separate from the location-state
+   legend above it (different concept: what the lines mean, not what the
+   markers mean). Only rendered once a route line exists. */
+.warehouse-map__route-legend {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+.warehouse-map__route-legend-hint {
+  margin: var(--space-1) 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 /* Route summary */
@@ -281,4 +615,303 @@
   padding-top: 8px;
   border-top: 1px solid var(--border);
   font-size: 14px;
+}
+
+/* Comparison hero -- the strongest visual hierarchy on the page, but
+   compact until a real comparison exists (no reserved blank area). */
+.comparison-hero {
+  border-color: var(--target-selected);
+  border-width: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+/* Step 1/2: a short instruction, not the full comparison card -- kept
+   compact so it never reads as the page's dominant "Route comparison"
+   heading before there is anything to compare. */
+.comparison-hero--intro h2 {
+  margin: 0;
+}
+.comparison-hero__intro-body {
+  color: var(--text-muted);
+  margin: 0;
+}
+.comparison-hero__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.comparison-hero__header h2 {
+  margin: 0;
+}
+.comparison-hero__speed {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.comparison-hero__speed input {
+  width: 70px;
+  min-width: 70px;
+}
+.comparison-hero__empty {
+  color: var(--text-muted);
+  margin: 0;
+  padding: var(--space-1) 0;
+}
+.comparison-hero__summary {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-h);
+  margin: 0;
+}
+.comparison-hero__visibility {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  border: none;
+  padding: 0;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.comparison-hero__visibility-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.comparison-hero__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  align-items: center;
+}
+.comparison-hero__column h3 {
+  margin: 0 0 var(--space-1);
+  font-size: 14px;
+  color: var(--text-muted);
+}
+.comparison-hero__distance {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-h);
+  margin: 0;
+}
+/* The unit rides along with the number but never competes with it --
+   smaller, lighter weight, muted color. */
+.comparison-hero__unit {
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.comparison-hero__duration {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: var(--space-1) 0 0;
+}
+.comparison-hero__column[data-role="recommended"] .comparison-hero__distance {
+  color: var(--route-opt);
+}
+
+/* Progress panel -- compact and visually secondary to the step hero above
+   it: smaller padding and a de-emphasized heading, since it's a status
+   readout rather than the current task. */
+.progress-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+.progress-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.progress-panel__header h2 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-muted);
+}
+.progress-panel__target-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.progress-panel__target-input {
+  width: 4.5em;
+  min-width: 64px;
+  text-align: center;
+}
+.progress-panel__bar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.progress-panel__bar-track {
+  flex: 1 1 auto;
+  max-width: 480px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.progress-panel__bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--target-selected);
+}
+.progress-panel__bar-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-h);
+  white-space: nowrap;
+}
+.progress-panel__stats {
+  display: flex;
+  gap: var(--space-6);
+  margin: 0;
+}
+.progress-panel__stats dt {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.progress-panel__stats dd {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-h);
+}
+.progress-panel__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* Manual route editor */
+.manual-route-editor__empty {
+  color: var(--text-muted);
+}
+.manual-route-editor__list {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.manual-route-editor__list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  flex-wrap: wrap;
+}
+.manual-route-editor__sequence {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--target-selected);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.manual-route-editor__label {
+  flex: 1 1 140px;
+  min-width: 120px;
+  font-size: 14px;
+}
+.manual-route-editor__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.manual-route-editor__office {
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.manual-route-editor__office .manual-route-editor__sequence {
+  background: var(--office);
+}
+.manual-route-editor__office .manual-route-editor__label {
+  font-weight: 600;
+}
+.manual-route-editor__footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.manual-route-editor__generate {
+  background: var(--target-selected);
+  border-color: var(--target-selected);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* Technical details -- intentionally demoted, collapsed by default. */
+.technical-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.technical-details .route-summary {
+  border: none;
+  padding: var(--space-3) 0 0;
+  margin-top: var(--space-2);
+}
+
+/* Language switcher */
+.language-switcher {
+  display: flex;
+  gap: var(--space-3);
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+/* Placed after the base rules it overrides so the cascade actually applies
+   it at narrow widths -- an equal-specificity rule earlier in the file
+   loses to a later one regardless of its @media condition. */
+@media (max-width: 480px) {
+  .app {
+    padding: var(--space-2);
+  }
+  .comparison-hero__grid {
+    grid-template-columns: 1fr;
+  }
+  .target-selector__list {
+    max-height: 220px;
+  }
+  .target-selector__filters {
+    grid-template-columns: 1fr;
+  }
 }

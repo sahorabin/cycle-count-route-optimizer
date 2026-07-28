@@ -34,7 +34,11 @@ export interface AttachmentPoint {
   accessDistance: number;
 }
 
-export interface CycleCountLocation extends AttachmentPoint {}
+/** `zone`/`aisle` are optional so existing fixtures/tests without them keep compiling. */
+export interface CycleCountLocation extends AttachmentPoint {
+  zone?: string;
+  aisle?: string;
+}
 
 export interface WarehouseGraph {
   aisleNodes: AisleNode[];

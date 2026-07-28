@@ -17,12 +17,27 @@
 
   --route-nn: #0d9488;
   --route-opt: #d97706;
+  --rack: #dde1e7;
+  --done: #16a34a;
 
   --danger: #b91c1c;
   --danger-bg: #fee2e2;
 
   --sans: system-ui, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
+
+  /* Consistent spacing scale used throughout the dashboard layout. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Shared control sizing so inputs/buttons/cards render as one system. */
+  --control-h: 36px;
+  --radius: 8px;
+  --radius-lg: 10px;
 
   font: 16px/1.5 var(--sans);
   color-scheme: light dark;
@@ -54,6 +69,8 @@
 
     --route-nn: #2dd4bf;
     --route-opt: #fbbf24;
+    --rack: #2a2e35;
+    --done: #4ade80;
 
     --danger: #fca5a5;
     --danger-bg: #3a1414;

@@ -1,81 +1,153 @@
 // @vitest-environment jsdom
 import { describe, expect, test, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { useState, type ComponentProps } from "react";
 import { TargetSelector } from "./TargetSelector";
-import { sampleWarehouse } from "../data/sampleWarehouse";
+import { LanguageProvider } from "../i18n/LanguageContext";
+import { largeWarehouse } from "../data/largeWarehouse";
+
+function Controlled(overrides: Partial<ComponentProps<typeof TargetSelector>> = {}) {
+  const [search, setSearch] = useState(overrides.search ?? "");
+  const [zone, setZone] = useState(overrides.zone ?? "");
+  return (
+    <TargetSelector
+      locations={largeWarehouse.locations}
+      selected={new Set()}
+      search={search}
+      zone={zone}
+      onSearchChange={setSearch}
+      onZoneChange={setZone}
+      onToggle={vi.fn()}
+      onSelectVisible={vi.fn()}
+      onClearAll={vi.fn()}
+      onContinueToRoute={vi.fn()}
+      {...overrides}
+    />
+  );
+}
+
+function setup(overrides: Partial<ComponentProps<typeof TargetSelector>> = {}) {
+  const onToggle = vi.fn();
+  const onSelectVisible = vi.fn();
+  const onClearAll = vi.fn();
+  const onContinueToRoute = vi.fn();
+  const { container } = render(
+    <LanguageProvider initialLanguage="en">
+      <Controlled
+        onToggle={onToggle}
+        onSelectVisible={onSelectVisible}
+        onClearAll={onClearAll}
+        onContinueToRoute={onContinueToRoute}
+        {...overrides}
+      />
+    </LanguageProvider>,
+  );
+  return { onToggle, onSelectVisible, onClearAll, onContinueToRoute, container };
+}
 
 describe("TargetSelector", () => {
-  test("renders one accessible checkbox per cycle-count location, and nothing for office/aisle nodes", () => {
-    render(
-      <TargetSelector
-        locations={sampleWarehouse.locations}
-        selected={new Set()}
-        onToggle={() => {}}
-        onSelectAll={() => {}}
-        onClearAll={() => {}}
-      />,
-    );
-
-    for (const location of sampleWarehouse.locations) {
-      expect(screen.getByRole("checkbox", { name: new RegExp(location.label) })).toBeTruthy();
-    }
-    expect(screen.queryByText(sampleWarehouse.start.label)).toBeNull();
-    for (const aisleNode of sampleWarehouse.aisleNodes) {
-      expect(screen.queryByRole("checkbox", { name: new RegExp(`^${aisleNode.id}$`) })).toBeNull();
-    }
+  test("shows the selected count out of 100", () => {
+    setup({ selected: new Set(["loc-A01", "loc-A02"]) });
+    expect(screen.getByText("2 of 100 selected")).toBeTruthy();
   });
 
-  test("reflects the selected set in checkbox state", () => {
-    render(
-      <TargetSelector
-        locations={sampleWarehouse.locations}
-        selected={new Set(["loc-B"])}
-        onToggle={() => {}}
-        onSelectAll={() => {}}
-        onClearAll={() => {}}
-      />,
-    );
-
-    const checkbox = screen.getByRole("checkbox", { name: /Bin A2-Mid/ }) as HTMLInputElement;
-    expect(checkbox.checked).toBe(true);
-    const other = screen.getByRole("checkbox", { name: /Bin A1-Back/ }) as HTMLInputElement;
-    expect(other.checked).toBe(false);
+  test("explains that checking a location means today's target, not route order", () => {
+    setup();
+    expect(
+      screen.getByText("Checking a location marks it as today's target. Set the visit order on the map below."),
+    ).toBeTruthy();
   });
 
-  test("calls onToggle with the location id when its checkbox is clicked", () => {
-    const onToggle = vi.fn();
-    render(
-      <TargetSelector
-        locations={sampleWarehouse.locations}
-        selected={new Set()}
-        onToggle={onToggle}
-        onSelectAll={() => {}}
-        onClearAll={() => {}}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("checkbox", { name: /Bin A3-Back/ }));
-
-    expect(onToggle).toHaveBeenCalledWith("loc-C");
+  test("text search filters the visible list by label", () => {
+    setup();
+    fireEvent.change(screen.getByPlaceholderText("Search locations"), {
+      target: { value: "Zone B - Bin 03" },
+    });
+    expect(screen.getByText("Zone B - Bin 03")).toBeTruthy();
+    expect(screen.queryByText("Zone A - Bin 01")).toBeNull();
   });
 
-  test("Select all and Clear all call their handlers", () => {
-    const onSelectAll = vi.fn();
-    const onClearAll = vi.fn();
-    render(
-      <TargetSelector
-        locations={sampleWarehouse.locations}
-        selected={new Set()}
-        onToggle={() => {}}
-        onSelectAll={onSelectAll}
-        onClearAll={onClearAll}
-      />,
-    );
+  test("zone filter narrows the visible list to one zone", () => {
+    setup();
+    fireEvent.change(screen.getByLabelText("zone"), { target: { value: "Zone C" } });
+    expect(screen.getAllByRole("checkbox")).toHaveLength(11); // 10 locations + the "selected only" toggle
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
-    fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
+  test("Select visible calls back with only the currently filtered ids", () => {
+    const { onSelectVisible } = setup();
+    fireEvent.change(screen.getByLabelText("zone"), { target: { value: "Zone C" } });
+    fireEvent.click(screen.getByRole("button", { name: "Select visible" }));
+    const calledWith = onSelectVisible.mock.calls[0][0] as string[];
+    expect(calledWith).toHaveLength(10);
+    expect(calledWith.every((id) => id.startsWith("loc-C"))).toBe(true);
+  });
 
-    expect(onSelectAll).toHaveBeenCalledTimes(1);
-    expect(onClearAll).toHaveBeenCalledTimes(1);
+  test("Selected only shows just the currently selected locations", () => {
+    setup({ selected: new Set(["loc-A01"]) });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Show selected only" }));
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2); // the "selected only" toggle + the 1 location
+  });
+
+  test("the list container is height-bounded and scrollable", () => {
+    setup();
+    const list = screen.getByRole("list");
+    expect(list.className).toContain("target-selector__list");
+  });
+
+  test("the selected tray shows an empty message with nothing selected", () => {
+    setup({ selected: new Set() });
+    expect(screen.getByText("No locations selected yet.")).toBeTruthy();
+  });
+
+  test("the selected tray lists chips for each selected location", () => {
+    setup({ selected: new Set(["loc-A01", "loc-B02"]) });
+    const tray = screen.getByText("Today's selected locations").closest("div")!;
+    expect(tray.textContent).toContain("Zone A - Bin 01");
+    expect(tray.textContent).toContain("Zone B - Bin 02");
+  });
+
+  test("each tray chip has an individual remove control that deselects just that location", () => {
+    const { onToggle } = setup({ selected: new Set(["loc-A01", "loc-B02"]) });
+    fireEvent.click(screen.getByRole("button", { name: "Remove Zone A - Bin 01" }));
+    expect(onToggle).toHaveBeenCalledWith("loc-A01");
+    expect(onToggle).not.toHaveBeenCalledWith("loc-B02");
+  });
+
+  test("beyond 6 selected locations, the tray collapses to a +N more control instead of clipping silently", () => {
+    const eightIds = ["loc-A01", "loc-A02", "loc-A03", "loc-A04", "loc-A05", "loc-A06", "loc-A07", "loc-A08"];
+    const { container } = setup({ selected: new Set(eightIds) });
+    const chips = () => container.querySelector(".target-selector__tray-chips")!;
+
+    expect(chips().textContent).toContain("Zone A - Bin 06");
+    expect(chips().textContent).not.toContain("Zone A - Bin 07");
+    expect(screen.getByRole("button", { name: "+2 more" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "+2 more" }));
+    expect(chips().textContent).toContain("Zone A - Bin 07");
+    expect(chips().textContent).toContain("Zone A - Bin 08");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+    expect(chips().textContent).not.toContain("Zone A - Bin 07");
+  });
+
+  test("a location is still individually removable while the tray is expanded", () => {
+    const eightIds = ["loc-A01", "loc-A02", "loc-A03", "loc-A04", "loc-A05", "loc-A06", "loc-A07", "loc-A08"];
+    const { onToggle } = setup({ selected: new Set(eightIds) });
+    fireEvent.click(screen.getByRole("button", { name: "+2 more" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove Zone A - Bin 08" }));
+    expect(onToggle).toHaveBeenCalledWith("loc-A08");
+  });
+
+  test("Continue to route is disabled with nothing selected and calls back when clicked", () => {
+    const { onContinueToRoute } = setup({ selected: new Set(["loc-A01"]) });
+    const button = screen.getByRole("button", { name: "Continue to route" });
+    expect(button).toHaveProperty("disabled", false);
+    fireEvent.click(button);
+    expect(onContinueToRoute).toHaveBeenCalled();
+  });
+
+  test("Continue to route is disabled when nothing is selected", () => {
+    setup({ selected: new Set() });
+    expect(screen.getByRole("button", { name: "Continue to route" })).toHaveProperty("disabled", true);
   });
 });
