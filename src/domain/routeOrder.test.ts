@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { validateRouteOrder } from "./routeOrder";
+import { assertValidRouteOrder, InvalidRouteOrderError, validateRouteOrder } from "./routeOrder";
 import { sampleWarehouse } from "../data/sampleWarehouse";
 
 describe("validateRouteOrder", () => {
@@ -112,5 +112,29 @@ describe("validateRouteOrder", () => {
     expect(result.errors).toContainEqual({ type: "missing-target", nodeId: "loc-B" });
     expect(result.errors).toContainEqual({ type: "aisle-node-in-order", nodeId: "F1" });
     expect(result.errors).toHaveLength(4);
+  });
+});
+
+describe("assertValidRouteOrder", () => {
+  test("does not throw for a valid order", () => {
+    expect(() =>
+      assertValidRouteOrder(
+        sampleWarehouse,
+        ["loc-A", "loc-B"],
+        ["office", "loc-A", "loc-B"],
+      ),
+    ).not.toThrow();
+  });
+
+  test("throws InvalidRouteOrderError carrying the underlying errors", () => {
+    try {
+      assertValidRouteOrder(sampleWarehouse, ["loc-A", "loc-B"], ["office", "loc-A"]);
+      throw new Error("expected assertValidRouteOrder to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(InvalidRouteOrderError);
+      const typedError = error as InvalidRouteOrderError;
+      expect(typedError.errors).toContainEqual({ type: "missing-target", nodeId: "loc-B" });
+      expect(typedError.message).toContain("loc-B");
+    }
   });
 });

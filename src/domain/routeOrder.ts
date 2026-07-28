@@ -61,3 +61,46 @@ export function validateRouteOrder(
 
   return { valid: errors.length === 0, errors };
 }
+
+export class InvalidRouteOrderError extends Error {
+  readonly errors: RouteOrderError[];
+
+  constructor(errors: RouteOrderError[]) {
+    super(`Invalid route order: ${errors.map(describeRouteOrderError).join("; ")}`);
+    this.name = "InvalidRouteOrderError";
+    this.errors = errors;
+  }
+}
+
+function describeRouteOrderError(error: RouteOrderError): string {
+  switch (error.type) {
+    case "start-not-first":
+      return "the start point must be first";
+    case "duplicate-start":
+      return "the start point appears more than once";
+    case "missing-target":
+      return `target "${error.nodeId}" is missing from the order`;
+    case "duplicate-target":
+      return `target "${error.nodeId}" appears more than once`;
+    case "unexpected-id":
+      return `"${error.nodeId}" is not a selected target`;
+    case "aisle-node-in-order":
+      return `"${error.nodeId}" is a walkable aisle node, not a stop`;
+  }
+}
+
+/**
+ * The application-facing boundary around validateRouteOrder: throws a
+ * descriptive InvalidRouteOrderError instead of letting route-refining code
+ * (2-opt) proceed with a malformed order.
+ */
+export function assertValidRouteOrder(
+  graph: WarehouseGraph,
+  targetIds: NodeId[],
+  order: NodeId[],
+): void {
+  const result = validateRouteOrder(graph, targetIds, order);
+  if (!result.valid) {
+    throw new InvalidRouteOrderError(result.errors);
+  }
+}
