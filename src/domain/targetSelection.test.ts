@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { validateTargetSelection } from "./targetSelection";
+import { assertValidTargetSelection, InvalidTargetSelectionError, validateTargetSelection } from "./targetSelection";
 import { sampleWarehouse } from "../data/sampleWarehouse";
 
 describe("validateTargetSelection", () => {
@@ -81,5 +81,27 @@ describe("validateTargetSelection", () => {
     const result = validateTargetSelection(sampleWarehouse, []);
 
     expect(result).toEqual({ valid: true, errors: [] });
+  });
+});
+
+describe("assertValidTargetSelection", () => {
+  test("does not throw for a valid selection", () => {
+    expect(() =>
+      assertValidTargetSelection(sampleWarehouse, ["loc-A", "loc-B"]),
+    ).not.toThrow();
+  });
+
+  test("throws InvalidTargetSelectionError carrying the underlying errors", () => {
+    try {
+      assertValidTargetSelection(sampleWarehouse, ["loc-A", "loc-A", "bogus"]);
+      throw new Error("expected assertValidTargetSelection to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(InvalidTargetSelectionError);
+      const typedError = error as InvalidTargetSelectionError;
+      expect(typedError.errors).toContainEqual({ type: "duplicate-target-id", nodeId: "loc-A" });
+      expect(typedError.errors).toContainEqual({ type: "unknown-target-id", nodeId: "bogus" });
+      expect(typedError.message).toContain("loc-A");
+      expect(typedError.message).toContain("bogus");
+    }
   });
 });

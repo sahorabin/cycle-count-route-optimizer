@@ -36,3 +36,32 @@ export function validateTargetSelection(
 
   return { valid: errors.length === 0, errors };
 }
+
+export class InvalidTargetSelectionError extends Error {
+  readonly errors: TargetSelectionError[];
+
+  constructor(errors: TargetSelectionError[]) {
+    super(`Invalid target selection: ${errors.map(describeTargetSelectionError).join("; ")}`);
+    this.name = "InvalidTargetSelectionError";
+    this.errors = errors;
+  }
+}
+
+function describeTargetSelectionError(error: TargetSelectionError): string {
+  return error.type === "duplicate-target-id"
+    ? `target "${error.nodeId}" was selected more than once`
+    : `"${error.nodeId}" is not a known cycle-count location`;
+}
+
+/**
+ * The application-facing boundary around validateTargetSelection: throws a
+ * descriptive InvalidTargetSelectionError instead of letting route
+ * computation code (nearestNeighborRoute, later 2-opt) proceed with a
+ * malformed target list.
+ */
+export function assertValidTargetSelection(graph: WarehouseGraph, targetIds: NodeId[]): void {
+  const result = validateTargetSelection(graph, targetIds);
+  if (!result.valid) {
+    throw new InvalidTargetSelectionError(result.errors);
+  }
+}

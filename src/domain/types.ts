@@ -43,6 +43,17 @@ export interface WarehouseGraph {
   locations: CycleCountLocation[];
 }
 
+/**
+ * The raw output of a single routing method: a fixed-start open order and
+ * its total aisle distance. `improvementPct` isn't known here -- it's only
+ * meaningful once compared against the "original" baseline, which happens
+ * when results from multiple methods are assembled together.
+ */
+export interface RouteComputation {
+  order: NodeId[];
+  totalDistance: number;
+}
+
 export type RouteMethod = "original" | "nearest-neighbor" | "two-opt";
 
 /**
