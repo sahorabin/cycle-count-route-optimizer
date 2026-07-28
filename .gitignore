@@ -26,3 +26,5 @@ dist-ssr
 # Internal session-continuity / planning docs -- not published
 CLAUDE.md
 docs/
+.vercel
+.env*
