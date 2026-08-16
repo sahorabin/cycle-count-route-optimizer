@@ -162,6 +162,41 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getAllByText("Ready")).toHaveLength(2);
     expect(screen.queryByText("Route to replay")).toBeNull();
     expect(container.querySelectorAll('input[type="radio"]')).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "3D" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "2D" }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  test("switches both renderers without resetting shared time, playback state, rate, or snapshots", () => {
+    const frames = installAnimationFrameHarness();
+    const { container, workerTimeline, recommendedTimeline } = setupComparison();
+    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+    const sharedTime = Math.min(
+      40,
+      Math.max(workerTimeline.totalDurationSeconds, recommendedTimeline.totalDurationSeconds) / 2,
+    );
+
+    fireEvent.change(seek, { target: { value: sharedTime } });
+    fireEvent.click(screen.getByRole("button", { name: "5×" }));
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    expect(frames.pendingCount()).toBe(1);
+    const statusBefore = [...container.querySelectorAll(".route-simulation-viewport__status")]
+      .map((status) => status.textContent);
+    const markersBefore = [...container.querySelectorAll('[data-testid="simulation-marker"]')]
+      .map((marker) => marker.getAttribute("transform"));
+
+    fireEvent.click(screen.getByRole("button", { name: "2D" }));
+    expect(seek.value).toBe(String(sharedTime));
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "5×" }).getAttribute("aria-pressed")).toBe("true");
+    expect([...container.querySelectorAll(".route-simulation-viewport__status")]
+      .map((status) => status.textContent)).toEqual(statusBefore);
+    expect([...container.querySelectorAll('[data-testid="simulation-marker"]')]
+      .map((marker) => marker.getAttribute("transform"))).toEqual(markersBefore);
+
+    fireEvent.click(screen.getByRole("button", { name: "3D" }));
+    expect(seek.value).toBe(String(sharedTime));
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(frames.pendingCount()).toBe(1);
   });
 
   test("makes the controlled comparison conditions explicit", () => {
@@ -283,5 +318,6 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getByText("방문 경로 순서만 다릅니다.")).toBeTruthy();
     expect(screen.getAllByText("준비")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "재생" })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "창고 보기" })).toBeTruthy();
   });
 });

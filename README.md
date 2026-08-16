@@ -19,9 +19,11 @@ clicking them on a floor-plan map, then computes a system-recommended route
 over the same stops and shows a side-by-side comparison — total distance,
 estimated time, and percentage improvement — using only aisle-constrained
 walking distance, never straight-line distance. After generating the
-comparison, the worker can watch the Actual / Worker and Recommended /
-Optimized routes simultaneously in two SVG warehouse views driven by one
-deterministic shared playback clock.
+comparison, the worker can replay the Actual / Worker and Recommended /
+Optimized routes simultaneously in matched 2D SVG or 3D warehouse views
+driven by one deterministic shared playback clock. The shared renderer
+toggle defaults to 3D, keeps both sides in the same mode, and retains SVG as
+the lightweight fallback when WebGL is unavailable.
 
 **This is a portfolio/demonstration project.** It runs entirely in the
 browser against one deterministic, synthetic 100-location warehouse layout
@@ -64,11 +66,25 @@ The UI is organized as one page with three sequential steps:
    distance, estimated time (from a configurable walking speed), and percent
    improvement.
 
+The resulting product flow is:
+
+```text
+Target selection
+→ Worker route
+→ Recommended route
+→ Deterministic comparison
+→ Shared-clock simulation
+→ 2D or 3D rendering
+```
+
 Once a comparison exists, the **Route replay** section displays the worker and
 recommended routes at the same time. Both start at simulation time zero and
 share Play/Pause, Reset, bidirectional seek, and 0.5x, 1x, 2x, 5x, and 10x
 playback controls. Each route separately reports distance traveled and total
 distance, completed locations, physical route duration, and completion state.
+One shared 2D/3D toggle changes both replay viewports without resetting the
+clock, seek position, or completion state. 3D is the default; the existing SVG
+view remains available and is used automatically if WebGL cannot initialize.
 Playback rate changes only how quickly the replay is viewed; it never changes
 physical walking speed or route duration. If one route finishes first, it
 remains completed at its final location while the shared clock continues
@@ -114,15 +130,15 @@ RouteComputation
 → Shared Playback Clock
 → SimulationSnapshot
 → Renderer projection
-→ WarehouseMap
+→ SVG or 3D renderer
 ```
 
 `RouteTraversal` expands a computed stop order through the existing
 `pathMatrix`. `RouteTimeline` projects that traversal onto physical walking
 time. The pure simulation engine derives a complete `SimulationSnapshot` for
-any timeline time, and the SVG layer consumes that snapshot only to decide
-where to draw the worker marker. SVG coordinates never determine routing
-distance, elapsed time, progress, or KPI values.
+any timeline time. Renderer projections consume the snapshot only to decide
+what to draw. SVG coordinates and Three.js world coordinates never determine
+routing distance, elapsed time, progress, or KPI values.
 
 S5 composes the two timelines around exactly one shared time source:
 
@@ -136,14 +152,16 @@ S5 composes the two timelines around exactly one shared time source:
                 ↓                       ↓
          Worker Snapshot         Recommended Snapshot
                 ↓                       ↓
-      Shared Viewport Logic    Shared Viewport Logic
+       Renderer Projection      Renderer Projection
                 ↓                       ↓
-          WarehouseMap             WarehouseMap
+          SVG or 3D                 SVG or 3D
 ```
 
 The same warehouse, selected locations, office start, physical walking speed,
-rendering assumptions, and simulation time are used on both sides. Only the
-route sequence differs.
+renderer mode, rendering assumptions, and simulation time are used on both
+sides. Only the route sequence differs. Both snapshots come from the same
+logical animation-frame loop and neither renderer owns routing, timing, or KPI
+logic.
 
 Completed simulation phases:
 
@@ -158,14 +176,31 @@ Completed simulation phases:
 - **S5 — Shared-Clock Side-by-Side Comparison** — derives both route
   snapshots from one playback clock and renders them through the same reusable
   viewport logic.
+- **S6 — 3D Warehouse Renderer** — adds a lazy-loaded procedural Three.js /
+  React Three Fiber projection of the same snapshots, with one shared 2D/3D
+  mode and an SVG fallback for unavailable WebGL.
 
-The next planned phase is **S6 — 3D Warehouse Renderer**. S6 is **not
-implemented**.
+**S1 through S6 are complete.** The next planned phase is the **Final Product
+Gate**, covering functional regression, visual QA, desktop/mobile and 2D/3D
+consistency, performance/loading, bilingual review, production readiness,
+documentation/release review, and deployment verification. It has not begun.
 
-3D rendering, Three.js, React Three Fiber, and Drei are **not implemented or
-installed**. A future 3D renderer must consume the same `SimulationSnapshot`
-truth as the current SVG renderer without adding routing, distance, timing, or
-playback-clock logic.
+### S6 3D renderer scope
+
+The 3D view is implemented with `three` 0.185.1, `@react-three/fiber` 9.7.0,
+and `@types/three` 0.185.4. Drei is not installed. It is a deliberately
+procedural warehouse visualization, not a digital twin: the scene contains a
+floor, rack blocks, office marker, cycle-count locations, route trail,
+procedural worker marker, ambient light, directional light, and a fixed
+orthographic camera. Warehouse `(x, y)` display coordinates map to Three.js
+`(X, Z)`; scene height `Y` is decorative only.
+
+External 3D models/assets, detailed shelf or pallet geometry, forklifts,
+AGVs, collision detection, physics, orbit controls, post-processing, and
+photorealism are outside S6. The view uses demand-based rendering and caps
+device pixel ratio at 1–1.5. Its lazy-loaded production chunk is currently
+about 888 kB before compression; this observed size is not a contractual
+budget, and keeps the initial application bundle smaller.
 
 ## Key features
 
@@ -175,9 +210,11 @@ playback-clock logic.
   in-route, completed
 - Worker route vs. system-recommended route comparison with a single-sentence
   savings summary, and a route-visibility toggle (worker / recommended / both)
-- Simultaneous Actual / Worker and Recommended / Optimized SVG replay driven
-  by one shared playback clock, with Play/Pause, Reset, bidirectional seek,
-  and 0.5x, 1x, 2x, 5x, and 10x playback-rate presets
+- Simultaneous Actual / Worker and Recommended / Optimized replay driven by
+  one shared playback clock, with Play/Pause, Reset, bidirectional seek, and
+  0.5x, 1x, 2x, 5x, and 10x playback-rate presets
+- One bilingual, responsive 2D/3D renderer toggle for both route views; 3D is
+  the default, SVG is retained, and WebGL failure falls back to SVG
 - Per-route state sourced from simulation truth: distance traveled and total
   distance, completed locations, physical route duration, and completion state
 - Equal side-by-side replay cards on desktop and readable vertically stacked
@@ -204,7 +241,7 @@ are reconciled with the live 100-location fixture and current selection.
 
 Runtime simulation state is deliberately ephemeral. Current simulation time,
 playing/paused state, playback rate, snapshots, simulated completed locations,
-and marker positions are not persisted.
+marker positions, and renderer runtime state are not persisted.
 
 ## Responsive behavior
 
@@ -215,25 +252,27 @@ hint — instead of shrinking the whole floor plan to an unreadable size; a
 "view full warehouse" toggle switches to a fit-to-width view. Horizontal
 scrolling stays confined to the map viewport; it does not cause page-level
 overflow. The two simulation cards use a side-by-side layout on desktop and
-stack vertically at mobile widths while retaining the same shared controls.
+stack vertically at mobile widths while retaining the same shared controls
+and matched SVG or canvas renderer mode.
 
 ## Tech stack
 
 - React 19 + TypeScript
 - Vite 8 (build/dev server)
-- Vitest 4 + @testing-library/react (361 tests across 36 files)
+- Three.js 0.185.1 + React Three Fiber 9.7.0 (`@types/three` 0.185.4; no Drei)
+- Vitest 4 + @testing-library/react (377 tests across 38 files)
 - oxlint (linting)
-- No backend, no external API calls, no runtime dependencies beyond React
-  itself
+- No backend or external API calls
 
 Current verified baseline:
 
 ```text
-361 tests passed
+377 tests passed
 0 failed
 TypeScript PASS
 lint PASS
 production build PASS
+git diff --check PASS
 ```
 
 ## Getting started
@@ -276,10 +315,10 @@ src/
   ui/             Presentation-only helpers with no routing logic
                   (SVG coordinates, route-path expansion, comparison math,
                   shared simulation composition, simulation-marker projection,
-                  duration formatting, rack layout)
+                  3D world projection, duration formatting, rack layout)
   components/     React components (map, selectors, route editor, comparison
-                  panel, shared-clock replay viewports, progress, workflow,
-                  language)
+                  panel, shared-clock replay viewports, lazy 3D viewport,
+                  progress, workflow, language)
   i18n/           Translation context, dictionary, and hook
   persistence/     localStorage read/write with per-field validation
   hooks/          Manual-route state and the React playback-frame adapter
@@ -293,16 +332,20 @@ src/
 - No backend: all state is local to one browser (`localStorage`), so there
   is no multi-user or multi-device sync.
 - No authentication, and no real-world GPS or indoor-positioning
-  integration — location coordinates are display-only SVG positions, not
+  integration — location coordinates are display-only renderer positions, not
   real-world measurements.
-- No 3D/WebGL renderer is present. **S6 — 3D Warehouse Renderer** is not
-  implemented; Three.js, React Three Fiber, and Drei are not installed.
+- The 3D renderer is a procedural, fixed-camera operational visualization,
+  not a photorealistic warehouse digital twin. Detailed assets, physics,
+  collision systems, vehicles, orbit controls, and post-processing are not
+  implemented; Drei is not installed.
 - The "technical details" panel (raw Nearest Neighbor vs. 2-opt) is
   intentionally left untranslated/unstyled as a transparency artifact, not a
   primary UI surface.
 - This project has not been deployed or used against a real warehouse; all
   distance/time figures shown are computed from the included model, not
   reported operational results.
+- S1–S6 implementation is complete, but the Final Product Gate and release /
+  deployment verification remain outstanding.
 
 ## Portfolio-oriented design and engineering decisions
 

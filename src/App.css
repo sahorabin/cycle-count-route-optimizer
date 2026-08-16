@@ -935,28 +935,32 @@
 .route-simulation-comparison__controls {
   min-width: 0;
   display: grid;
-  grid-template-columns: auto minmax(160px, 1fr) auto;
+  grid-template-columns: auto auto minmax(160px, 1fr) auto;
   align-items: end;
   gap: var(--space-3);
 }
 .route-simulation-comparison__transport,
+.route-simulation-comparison__renderer-modes > div,
 .route-simulation-comparison__rates > div {
   display: flex;
   gap: var(--space-2);
   flex-wrap: wrap;
 }
-.route-simulation-comparison__rates {
+.route-simulation-comparison__rates,
+.route-simulation-comparison__renderer-modes {
   min-width: 0;
   margin: 0;
   padding: 0;
   border: 0;
 }
 .route-simulation-comparison__rates legend,
+.route-simulation-comparison__renderer-modes legend,
 .route-simulation-comparison__seek {
   color: var(--text-muted);
   font-size: 12px;
 }
-.route-simulation-comparison__rates legend {
+.route-simulation-comparison__rates legend,
+.route-simulation-comparison__renderer-modes legend {
   margin-bottom: var(--space-1);
 }
 .route-simulation-comparison__seek {
@@ -975,7 +979,8 @@
   color: #fff !important;
   font-weight: 600 !important;
 }
-.route-simulation-comparison__rates button[aria-pressed="true"] {
+.route-simulation-comparison__rates button[aria-pressed="true"],
+.route-simulation-comparison__renderer-modes button[aria-pressed="true"] {
   border-color: var(--target-selected);
   color: var(--target-selected);
   font-weight: 700;
@@ -1023,10 +1028,30 @@
   border-color: var(--done);
   color: var(--done);
 }
-.route-simulation-viewport > .warehouse-map {
+.route-simulation-viewport > .warehouse-map,
+.warehouse-3d__fallback > .warehouse-map {
   padding: 0;
   border: 0;
   background: transparent;
+}
+.warehouse-3d {
+  width: 100%;
+  height: clamp(280px, 28vw, 360px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #f7fafc;
+}
+.warehouse-3d canvas {
+  display: block;
+}
+.warehouse-3d__fallback {
+  min-width: 0;
+}
+.warehouse-3d__fallback-message {
+  margin: 0 0 var(--space-2);
+  color: var(--text-muted);
+  font-size: 12px;
 }
 .route-simulation-viewport__stats {
   display: grid;
@@ -1073,6 +1098,9 @@
   .route-simulation-comparison__controls,
   .route-simulation-comparison__viewports {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .warehouse-3d {
+    height: 320px;
   }
 }
 
@@ -1125,5 +1153,8 @@
   }
   .route-simulation-viewport__stats {
     grid-template-columns: 1fr;
+  }
+  .warehouse-3d {
+    height: 270px;
   }
 }

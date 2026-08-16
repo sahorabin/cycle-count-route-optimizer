@@ -1,4 +1,4 @@
-import { useId, useMemo } from "react";
+import { useId, useMemo, useState } from "react";
 import type { NodeId, WarehouseGraph } from "../domain/types";
 import { useSimulationPlayback } from "../hooks/useSimulationPlayback";
 import { useTranslation } from "../i18n/useTranslation";
@@ -6,7 +6,11 @@ import {
   getSharedComparisonDuration,
   getSharedComparisonSnapshots,
 } from "../ui/sharedSimulationComparison";
-import { RouteSimulationViewport, type ReplayRouteInput } from "./RouteSimulationReplay";
+import {
+  RouteSimulationViewport,
+  type ReplayRouteInput,
+  type SimulationRendererMode,
+} from "./RouteSimulationReplay";
 
 interface RouteSimulationComparisonProps {
   graph: WarehouseGraph;
@@ -42,6 +46,7 @@ export function RouteSimulationComparison({
 }: RouteSimulationComparisonProps) {
   const { t } = useTranslation();
   const comparisonId = useId();
+  const [rendererMode, setRendererMode] = useState<SimulationRendererMode>("3d");
   const sharedDurationSeconds = getSharedComparisonDuration(
     worker.timeline,
     recommended.timeline,
@@ -86,6 +91,21 @@ export function RouteSimulationComparison({
         </div>
 
         <div className="route-simulation-comparison__controls">
+          <fieldset className="route-simulation-comparison__renderer-modes">
+            <legend>{t("replay.renderer")}</legend>
+            <div>
+              {(["3d", "2d"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={rendererMode === mode}
+                  onClick={() => setRendererMode(mode)}
+                >
+                  {mode === "3d" ? t("replay.renderer3d") : t("replay.renderer2d")}
+                </button>
+              ))}
+            </div>
+          </fieldset>
           <div className="route-simulation-comparison__transport">
             <button
               type="button"
@@ -138,6 +158,7 @@ export function RouteSimulationComparison({
           input={worker}
           snapshot={snapshots.worker}
           mode="worker"
+          rendererMode={rendererMode}
         />
         <RouteSimulationViewport
           graph={graph}
@@ -146,6 +167,7 @@ export function RouteSimulationComparison({
           input={recommended}
           snapshot={snapshots.recommended}
           mode="recommended"
+          rendererMode={rendererMode}
         />
       </div>
     </section>

@@ -1,4 +1,4 @@
-import { useId, useMemo } from "react";
+import { lazy, Suspense, useId, useMemo } from "react";
 import type { NodeId, RouteComputation, RouteTimeline, WarehouseGraph } from "../domain/types";
 import { useTranslation } from "../i18n/useTranslation";
 import type { SimulationSnapshot } from "../simulation/types";
@@ -6,7 +6,13 @@ import { projectSimulationMarkerToSvg } from "../ui/simulationMarker";
 import { NN_OFFSET, OPT_OFFSET } from "../ui/svgPoints";
 import { WarehouseMap } from "./WarehouseMap";
 
+const Warehouse3DViewport = lazy(async () => {
+  const module = await import("./Warehouse3DViewport");
+  return { default: module.Warehouse3DViewport };
+});
+
 export type ReplayRouteMode = "worker" | "recommended";
+export type SimulationRendererMode = "2d" | "3d";
 
 export interface ReplayRouteInput {
   route: RouteComputation;
@@ -20,6 +26,7 @@ interface RouteSimulationViewportProps {
   input: ReplayRouteInput;
   snapshot: SimulationSnapshot;
   mode: ReplayRouteMode;
+  rendererMode: SimulationRendererMode;
 }
 
 function formatReplayTime(totalSeconds: number): string {
@@ -52,6 +59,7 @@ export function RouteSimulationViewport({
   input,
   snapshot,
   mode,
+  rendererMode,
 }: RouteSimulationViewportProps) {
   const { t } = useTranslation();
   const viewportId = useId();
@@ -79,6 +87,22 @@ export function RouteSimulationViewport({
     inProgress: t("replay.status.inProgress"),
     completed: t("replay.status.completed"),
   }[status];
+  const warehouseMap = (
+    <WarehouseMap
+      graph={graph}
+      selected={selectedIds}
+      visitIds={visitIds}
+      pathMatrix={pathMatrix}
+      workerRoute={mode === "worker" ? input.route : null}
+      recommendedRoute={mode === "recommended" ? input.route : null}
+      routeVisibility={mode}
+      manualStopIds={[...input.timeline.order.slice(1)]}
+      completedIds={completedIds}
+      searchMatchIds={emptySearchMatches}
+      simulationMarker={marker}
+      onLocationClick={() => undefined}
+    />
+  );
 
   return (
     <article
@@ -98,20 +122,27 @@ export function RouteSimulationViewport({
         </span>
       </header>
 
-      <WarehouseMap
-        graph={graph}
-        selected={selectedIds}
-        visitIds={visitIds}
-        pathMatrix={pathMatrix}
-        workerRoute={mode === "worker" ? input.route : null}
-        recommendedRoute={mode === "recommended" ? input.route : null}
-        routeVisibility={mode}
-        manualStopIds={[...input.timeline.order.slice(1)]}
-        completedIds={completedIds}
-        searchMatchIds={emptySearchMatches}
-        simulationMarker={marker}
-        onLocationClick={() => undefined}
-      />
+      {rendererMode === "3d" ? (
+        <Suspense fallback={warehouseMap}>
+          <Warehouse3DViewport
+            graph={graph}
+            timeline={input.timeline}
+            snapshot={snapshot}
+            mode={mode}
+            accessibleLabel={
+              mode === "worker" ? t("replay.canvas.worker") : t("replay.canvas.recommended")
+            }
+            fallback={(
+              <>
+                <p className="warehouse-3d__fallback-message" role="status">
+                  {t("replay.webglFallback")}
+                </p>
+                {warehouseMap}
+              </>
+            )}
+          />
+        </Suspense>
+      ) : warehouseMap}
 
       <div className="route-simulation-viewport__stats" aria-label={t("replay.kpis")}>
         <div>
