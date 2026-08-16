@@ -19,7 +19,8 @@ import { ComparisonHero } from "./components/ComparisonHero";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { TechnicalDetails } from "./components/TechnicalDetails";
 import { WorkflowSteps, type WorkflowStep } from "./components/WorkflowSteps";
-import { RouteSimulationReplay, type ReplayRouteInput } from "./components/RouteSimulationReplay";
+import type { ReplayRouteInput } from "./components/RouteSimulationReplay";
+import { RouteSimulationComparison } from "./components/RouteSimulationComparison";
 import "./App.css";
 
 const KNOWN_LOCATION_IDS = new Set(largeWarehouse.locations.map((l) => l.id));
@@ -336,7 +337,7 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
       </main>
 
       {comparisonRequested && replayInputs ? (
-        <RouteSimulationReplay
+        <RouteSimulationComparison
           graph={largeWarehouse}
           visitIds={manualRouteData.visitIds}
           pathMatrix={manualRouteData.pathMatrix}

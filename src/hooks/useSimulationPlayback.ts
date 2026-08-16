@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { RouteTimeline } from "../domain/types";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   advancePlaybackClock,
   createPlaybackClock,
@@ -9,12 +8,10 @@ import {
   seekPlaybackClock,
   setPlaybackRate,
 } from "../simulation/playbackClock";
-import { getSimulationSnapshotAtTime } from "../simulation/simulationSnapshot";
-import type { PlaybackClockState, SimulationSnapshot } from "../simulation/types";
+import type { PlaybackClockState } from "../simulation/types";
 
 export interface SimulationPlaybackController {
   clock: PlaybackClockState;
-  snapshot: SimulationSnapshot;
   play: () => void;
   pause: () => void;
   reset: () => void;
@@ -23,7 +20,7 @@ export interface SimulationPlaybackController {
 }
 
 export function useSimulationPlayback(
-  timeline: RouteTimeline,
+  durationSeconds: number,
   simulationInputKey = "",
 ): SimulationPlaybackController {
   const [clock, setClock] = useState<PlaybackClockState>(() => createPlaybackClock());
@@ -32,7 +29,7 @@ export function useSimulationPlayback(
   useLayoutEffect(() => {
     previousAnimationTimestamp.current = null;
     setClock((current) => resetPlaybackClock(current));
-  }, [simulationInputKey, timeline]);
+  }, [durationSeconds, simulationInputKey]);
 
   useEffect(() => {
     if (!clock.isPlaying) {
@@ -52,7 +49,7 @@ export function useSimulationPlayback(
       if (previousTimestamp !== null) {
         const realDeltaSeconds = Math.max(0, (timestamp - previousTimestamp) / 1_000);
         setClock((current) =>
-          advancePlaybackClock(current, realDeltaSeconds, timeline.totalDurationSeconds),
+          advancePlaybackClock(current, realDeltaSeconds, durationSeconds),
         );
       }
 
@@ -66,16 +63,11 @@ export function useSimulationPlayback(
       window.cancelAnimationFrame(frameId);
       previousAnimationTimestamp.current = null;
     };
-  }, [clock.isPlaying, timeline.totalDurationSeconds]);
-
-  const snapshot = useMemo(
-    () => getSimulationSnapshotAtTime(timeline, clock.timeSeconds),
-    [clock.timeSeconds, timeline],
-  );
+  }, [clock.isPlaying, durationSeconds]);
 
   const play = useCallback(() => {
-    setClock((current) => playPlaybackClock(current, timeline.totalDurationSeconds));
-  }, [timeline.totalDurationSeconds]);
+    setClock((current) => playPlaybackClock(current, durationSeconds));
+  }, [durationSeconds]);
 
   const pause = useCallback(() => {
     setClock((current) => pausePlaybackClock(current));
@@ -87,14 +79,14 @@ export function useSimulationPlayback(
 
   const seek = useCallback(
     (timeSeconds: number) => {
-      setClock((current) => seekPlaybackClock(current, timeSeconds, timeline.totalDurationSeconds));
+      setClock((current) => seekPlaybackClock(current, timeSeconds, durationSeconds));
     },
-    [timeline.totalDurationSeconds],
+    [durationSeconds],
   );
 
   const setRate = useCallback((playbackRate: number) => {
     setClock((current) => setPlaybackRate(current, playbackRate));
   }, []);
 
-  return { clock, snapshot, play, pause, reset, seek, setRate };
+  return { clock, play, pause, reset, seek, setRate };
 }

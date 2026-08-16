@@ -19,8 +19,9 @@ clicking them on a floor-plan map, then computes a system-recommended route
 over the same stops and shows a side-by-side comparison — total distance,
 estimated time, and percentage improvement — using only aisle-constrained
 walking distance, never straight-line distance. After generating the
-comparison, the worker can replay either route in the existing SVG warehouse
-view using the same deterministic simulation state.
+comparison, the worker can watch the Actual / Worker and Recommended /
+Optimized routes simultaneously in two SVG warehouse views driven by one
+deterministic shared playback clock.
 
 **This is a portfolio/demonstration project.** It runs entirely in the
 browser against one deterministic, synthetic 100-location warehouse layout
@@ -63,10 +64,15 @@ The UI is organized as one page with three sequential steps:
    distance, estimated time (from a configurable walking speed), and percent
    improvement.
 
-Once a comparison exists, the **Route replay** section displays one route at
-a time. The user can switch between the worker and recommended routes, play
-or pause, reset, seek in either direction, and choose a playback rate without
-changing the route's physical walking speed or duration.
+Once a comparison exists, the **Route replay** section displays the worker and
+recommended routes at the same time. Both start at simulation time zero and
+share Play/Pause, Reset, bidirectional seek, and 0.5x, 1x, 2x, 5x, and 10x
+playback controls. Each route separately reports distance traveled and total
+distance, completed locations, physical route duration, and completion state.
+Playback rate changes only how quickly the replay is viewed; it never changes
+physical walking speed or route duration. If one route finishes first, it
+remains completed at its final location while the shared clock continues
+until the longer route finishes.
 
 A location can also be marked complete once counted, and a compact progress
 panel tracks completed vs. remaining against a daily target count.
@@ -105,8 +111,10 @@ The deterministic simulation and rendering pipeline is:
 RouteComputation
 → RouteTraversal
 → RouteTimeline
+→ Shared Playback Clock
 → SimulationSnapshot
-→ SVG renderer
+→ Renderer projection
+→ WarehouseMap
 ```
 
 `RouteTraversal` expands a computed stop order through the existing
@@ -115,6 +123,27 @@ time. The pure simulation engine derives a complete `SimulationSnapshot` for
 any timeline time, and the SVG layer consumes that snapshot only to decide
 where to draw the worker marker. SVG coordinates never determine routing
 distance, elapsed time, progress, or KPI values.
+
+S5 composes the two timelines around exactly one shared time source:
+
+```text
+                    Shared Playback Clock
+                            │
+                      simulationTime
+                ┌───────────┴───────────┐
+                ↓                       ↓
+         Worker Timeline         Recommended Timeline
+                ↓                       ↓
+         Worker Snapshot         Recommended Snapshot
+                ↓                       ↓
+      Shared Viewport Logic    Shared Viewport Logic
+                ↓                       ↓
+          WarehouseMap             WarehouseMap
+```
+
+The same warehouse, selected locations, office start, physical walking speed,
+rendering assumptions, and simulation time are used on both sides. Only the
+route sequence differs.
 
 Completed simulation phases:
 
@@ -126,12 +155,17 @@ Completed simulation phases:
   an immutable simulation snapshot and supplies pure playback-clock controls.
 - **S4 — SVG Simulation Replay** — connects the pure clock and snapshots to
   the existing warehouse SVG through a reusable single-route replay UI.
+- **S5 — Shared-Clock Side-by-Side Comparison** — derives both route
+  snapshots from one playback clock and renders them through the same reusable
+  viewport logic.
 
-The next planned phase is **S5 — Side-by-Side Actual vs Recommended
-Shared-Clock Comparison**.
+The next planned phase is **S6 — 3D Warehouse Renderer**. S6 is **not
+implemented**.
 
-3D rendering, Three.js, and React Three Fiber are **not implemented**. They
-belong to a later phase after S5.
+3D rendering, Three.js, React Three Fiber, and Drei are **not implemented or
+installed**. A future 3D renderer must consume the same `SimulationSnapshot`
+truth as the current SVG renderer without adding routing, distance, timing, or
+playback-clock logic.
 
 ## Key features
 
@@ -141,12 +175,13 @@ belong to a later phase after S5.
   in-route, completed
 - Worker route vs. system-recommended route comparison with a single-sentence
   savings summary, and a route-visibility toggle (worker / recommended / both)
-- A deterministic single-viewport SVG replay for either the worker/actual or
-  recommended route, with Play/Pause, Reset, bidirectional seek, and 0.5x,
-  1x, 2x, 5x, and 10x playback-rate presets
-- Replay status sourced from simulation truth: elapsed simulation time,
-  distance traveled, and completed locations
-- Responsive replay controls and warehouse viewport support on mobile
+- Simultaneous Actual / Worker and Recommended / Optimized SVG replay driven
+  by one shared playback clock, with Play/Pause, Reset, bidirectional seek,
+  and 0.5x, 1x, 2x, 5x, and 10x playback-rate presets
+- Per-route state sourced from simulation truth: distance traveled and total
+  distance, completed locations, physical route duration, and completion state
+- Equal side-by-side replay cards on desktop and readable vertically stacked
+  cards on mobile
 - A collapsed "technical details" panel showing the raw Nearest Neighbor vs.
   2-opt output, kept separate from the primary worker/recommended comparison
 - A deterministic, generated 100-location fixture (10 zones × 10 bins) with
@@ -167,9 +202,9 @@ validated independently on load and falls back to a default if malformed, so
 one corrupted field can't take down the rest of the saved state. Stored ids
 are reconciled with the live 100-location fixture and current selection.
 
-Runtime simulation state is deliberately ephemeral. Current replay time,
-playing/paused state, playback rate, replay-route mode, snapshot completion,
-and marker position are not persisted.
+Runtime simulation state is deliberately ephemeral. Current simulation time,
+playing/paused state, playback rate, snapshots, simulated completed locations,
+and marker positions are not persisted.
 
 ## Responsive behavior
 
@@ -179,13 +214,14 @@ defaults to a zoomed-in, horizontally pannable view — with a short on-screen
 hint — instead of shrinking the whole floor plan to an unreadable size; a
 "view full warehouse" toggle switches to a fit-to-width view. Horizontal
 scrolling stays confined to the map viewport; it does not cause page-level
-overflow.
+overflow. The two simulation cards use a side-by-side layout on desktop and
+stack vertically at mobile widths while retaining the same shared controls.
 
 ## Tech stack
 
 - React 19 + TypeScript
 - Vite 8 (build/dev server)
-- Vitest 4 + @testing-library/react (354 tests across 36 files)
+- Vitest 4 + @testing-library/react (361 tests across 36 files)
 - oxlint (linting)
 - No backend, no external API calls, no runtime dependencies beyond React
   itself
@@ -193,7 +229,7 @@ overflow.
 Current verified baseline:
 
 ```text
-354 tests passed
+361 tests passed
 0 failed
 TypeScript PASS
 lint PASS
@@ -237,11 +273,13 @@ src/
   domain/        Graph validation, routing algorithms, fixed-start-open-path
                   contract, RouteTraversal, and RouteTimeline
   simulation/    Pure snapshot projection and playback-clock state operations
-  ui/             Presentation-only helpers with no domain logic
+  ui/             Presentation-only helpers with no routing logic
                   (SVG coordinates, route-path expansion, comparison math,
-                  simulation-marker projection, duration formatting, rack layout)
+                  shared simulation composition, simulation-marker projection,
+                  duration formatting, rack layout)
   components/     React components (map, selectors, route editor, comparison
-                  panel, single-route replay, progress, workflow, language)
+                  panel, shared-clock replay viewports, progress, workflow,
+                  language)
   i18n/           Translation context, dictionary, and hook
   persistence/     localStorage read/write with per-field validation
   hooks/          Manual-route state and the React playback-frame adapter
@@ -257,10 +295,8 @@ src/
 - No authentication, and no real-world GPS or indoor-positioning
   integration — location coordinates are display-only SVG positions, not
   real-world measurements.
-- Replay currently shows one route viewport at a time. Side-by-side
-  Actual-vs-Recommended playback with a shared clock is planned for S5.
-- No 3D/WebGL renderer is present; Three.js and React Three Fiber are reserved
-  for a later phase after S5.
+- No 3D/WebGL renderer is present. **S6 — 3D Warehouse Renderer** is not
+  implemented; Three.js, React Three Fiber, and Drei are not installed.
 - The "technical details" panel (raw Nearest Neighbor vs. 2-opt) is
   intentionally left untranslated/unstyled as a transparency artifact, not a
   primary UI surface.

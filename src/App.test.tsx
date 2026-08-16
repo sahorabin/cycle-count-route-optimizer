@@ -64,8 +64,10 @@ describe("App (Phase 5 dashboard)", () => {
       "Both routes cover the same distance",
     );
     expect(document.querySelector(".comparison-hero__summary")!.textContent).not.toMatch(/saved/);
-    expect(screen.getByRole("heading", { name: "Route replay" })).toBeTruthy();
-    expect(document.querySelectorAll(".route-simulation-replay svg")).toHaveLength(1);
+    expect(
+      screen.getByRole("heading", { name: "Worker vs recommended route replay" }),
+    ).toBeTruthy();
+    expect(document.querySelectorAll(".route-simulation-comparison svg")).toHaveLength(2);
   });
 
   test("walking-speed and selected-location changes reset replay while preserving rate", () => {

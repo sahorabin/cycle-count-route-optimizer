@@ -2,37 +2,7 @@
 import { StrictMode, type PropsWithChildren } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import type { RouteTimeline } from "../domain/types";
 import { useSimulationPlayback } from "./useSimulationPlayback";
-
-function timeline(totalDistance = 100, totalDurationSeconds = 100): RouteTimeline {
-  return {
-    order: ["start", "destination"],
-    walkingSpeedMetersPerMinute: (totalDistance / totalDurationSeconds) * 60,
-    totalDistance,
-    totalDurationSeconds,
-    legs: [
-      {
-        from: "start",
-        to: "destination",
-        distance: totalDistance,
-        startTimeSeconds: 0,
-        durationSeconds: totalDurationSeconds,
-        endTimeSeconds: totalDurationSeconds,
-        segments: [
-          {
-            from: "start",
-            to: "destination",
-            distance: totalDistance,
-            startTimeSeconds: 0,
-            durationSeconds: totalDurationSeconds,
-            endTimeSeconds: totalDurationSeconds,
-          },
-        ],
-      },
-    ],
-  };
-}
 
 function installAnimationFrameHarness() {
   let nextId = 1;
@@ -63,18 +33,15 @@ afterEach(() => {
 describe("useSimulationPlayback", () => {
   test("starts paused at time zero without scheduling a frame", () => {
     const frames = installAnimationFrameHarness();
-    const stableTimeline = timeline();
-    const { result } = renderHook(() => useSimulationPlayback(stableTimeline));
+    const { result } = renderHook(() => useSimulationPlayback(100));
 
     expect(result.current.clock).toEqual({ timeSeconds: 0, playbackRate: 1, isPlaying: false });
-    expect(result.current.snapshot.timeSeconds).toBe(0);
     expect(frames.pendingCount()).toBe(0);
   });
 
   test("play advances from frame deltas and pause stops advancement", () => {
     const frames = installAnimationFrameHarness();
-    const stableTimeline = timeline();
-    const { result } = renderHook(() => useSimulationPlayback(stableTimeline));
+    const { result } = renderHook(() => useSimulationPlayback(100));
 
     act(() => result.current.play());
     frames.run(1_000);
@@ -88,8 +55,7 @@ describe("useSimulationPlayback", () => {
 
   test("resume discards paused wall-clock time instead of applying a giant delta", () => {
     const frames = installAnimationFrameHarness();
-    const stableTimeline = timeline();
-    const { result } = renderHook(() => useSimulationPlayback(stableTimeline));
+    const { result } = renderHook(() => useSimulationPlayback(100));
 
     act(() => result.current.play());
     frames.run(1_000);
@@ -106,8 +72,7 @@ describe("useSimulationPlayback", () => {
 
   test("reset pauses at zero and preserves the selected playback rate", () => {
     installAnimationFrameHarness();
-    const stableTimeline = timeline();
-    const { result } = renderHook(() => useSimulationPlayback(stableTimeline));
+    const { result } = renderHook(() => useSimulationPlayback(100));
 
     act(() => {
       result.current.setRate(10);
@@ -119,24 +84,21 @@ describe("useSimulationPlayback", () => {
     expect(result.current.clock).toEqual({ timeSeconds: 0, playbackRate: 10, isPlaying: false });
   });
 
-  test("seek derives backward and forward snapshots from the requested clock time", () => {
+  test("seek moves the shared clock backward and forward deterministically", () => {
     installAnimationFrameHarness();
-    const stableTimeline = timeline();
-    const { result } = renderHook(() => useSimulationPlayback(stableTimeline));
+    const { result } = renderHook(() => useSimulationPlayback(100));
 
     act(() => result.current.seek(80));
-    expect(result.current.snapshot.current?.progress).toBe(0.8);
-    expect(result.current.snapshot.distanceTraveled).toBe(80);
+    expect(result.current.clock.timeSeconds).toBe(80);
 
     act(() => result.current.seek(20));
-    expect(result.current.snapshot.current?.progress).toBe(0.2);
-    expect(result.current.snapshot.distanceTraveled).toBe(20);
+    expect(result.current.clock.timeSeconds).toBe(20);
   });
 
-  test("10x changes wall-clock progression without changing physical timeline totals", () => {
+  test("10x changes wall-clock progression without changing the supplied physical duration", () => {
     const frames = installAnimationFrameHarness();
-    const stableTimeline = timeline(100, 100);
-    const { result } = renderHook(() => useSimulationPlayback(stableTimeline));
+    const physicalDuration = 100;
+    const { result } = renderHook(() => useSimulationPlayback(physicalDuration));
 
     act(() => {
       result.current.setRate(10);
@@ -146,32 +108,26 @@ describe("useSimulationPlayback", () => {
     frames.run(2_000);
 
     expect(result.current.clock.timeSeconds).toBe(10);
-    expect(result.current.snapshot.totalDurationSeconds).toBe(100);
-    expect(result.current.snapshot.totalDistance).toBe(100);
+    expect(physicalDuration).toBe(100);
   });
 
-  test("completion clamps, pauses, and leaves the deterministic snapshot complete", () => {
+  test("completion clamps and pauses the shared clock", () => {
     const frames = installAnimationFrameHarness();
-    const stableTimeline = timeline(1, 1);
-    const { result } = renderHook(() => useSimulationPlayback(stableTimeline));
+    const { result } = renderHook(() => useSimulationPlayback(1));
 
     act(() => result.current.play());
     frames.run(1_000);
     frames.run(3_000);
 
     expect(result.current.clock).toEqual({ timeSeconds: 1, playbackRate: 1, isPlaying: false });
-    expect(result.current.snapshot.isComplete).toBe(true);
-    expect(result.current.snapshot.current).toBeNull();
     expect(frames.pendingCount()).toBe(0);
   });
 
-  test("changing the timeline resets to zero and pauses while preserving playback rate", () => {
+  test("changing a physical input key resets to zero and pauses while preserving playback rate", () => {
     installAnimationFrameHarness();
-    const first = timeline(100, 100);
-    const second = timeline(200, 200);
     const { result, rerender } = renderHook(
-      ({ activeTimeline }) => useSimulationPlayback(activeTimeline),
-      { initialProps: { activeTimeline: first } },
+      ({ inputKey }) => useSimulationPlayback(200, inputKey),
+      { initialProps: { inputKey: "first" } },
     );
 
     act(() => {
@@ -179,17 +135,15 @@ describe("useSimulationPlayback", () => {
       result.current.seek(60);
       result.current.play();
     });
-    rerender({ activeTimeline: second });
+    rerender({ inputKey: "second" });
 
     expect(result.current.clock).toEqual({ timeSeconds: 0, playbackRate: 5, isPlaying: false });
-    expect(result.current.snapshot.totalDurationSeconds).toBe(200);
   });
 
   test("StrictMode effect replay still owns only one animation-frame loop", () => {
     const frames = installAnimationFrameHarness();
-    const stableTimeline = timeline();
     const wrapper = ({ children }: PropsWithChildren) => <StrictMode>{children}</StrictMode>;
-    const { result } = renderHook(() => useSimulationPlayback(stableTimeline), { wrapper });
+    const { result } = renderHook(() => useSimulationPlayback(100), { wrapper });
 
     act(() => result.current.play());
     expect(frames.pendingCount()).toBe(1);

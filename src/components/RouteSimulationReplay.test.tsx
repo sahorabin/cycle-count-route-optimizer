@@ -1,18 +1,53 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { sampleWarehouse } from "../data/sampleWarehouse";
 import { buildValidatedDistanceMatrix } from "../domain/distanceMatrix";
 import { nearestNeighborRoute } from "../domain/nearestNeighbor";
 import { buildRouteTimeline } from "../domain/routeTimeline";
 import { buildRouteTraversal } from "../domain/routeTraversal";
 import { twoOptRoute } from "../domain/twoOpt";
-import type { NodeId, RouteComputation, WarehouseGraph } from "../domain/types";
+import type { NodeId, RouteComputation, RouteTimeline, WarehouseGraph } from "../domain/types";
 import { LanguageProvider } from "../i18n/LanguageContext";
-import { NN_OFFSET, OPT_OFFSET } from "../ui/svgPoints";
-import { RouteSimulationReplay } from "./RouteSimulationReplay";
+import { OPT_OFFSET } from "../ui/svgPoints";
+import {
+  getSharedComparisonDuration,
+  getSharedComparisonSnapshots,
+} from "../ui/sharedSimulationComparison";
+import {
+  RouteSimulationComparison,
+} from "./RouteSimulationComparison";
 
-function setupReplay() {
+function linearTimeline(totalDurationSeconds: number): RouteTimeline {
+  return {
+    order: ["start", "destination"],
+    walkingSpeedMetersPerMinute: 60,
+    totalDistance: totalDurationSeconds,
+    totalDurationSeconds,
+    legs: [
+      {
+        from: "start",
+        to: "destination",
+        distance: totalDurationSeconds,
+        startTimeSeconds: 0,
+        durationSeconds: totalDurationSeconds,
+        endTimeSeconds: totalDurationSeconds,
+        segments: [
+          {
+            from: "start",
+            to: "destination",
+            distance: totalDurationSeconds,
+            startTimeSeconds: 0,
+            durationSeconds: totalDurationSeconds,
+            endTimeSeconds: totalDurationSeconds,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function setupComparison(language: "ko" | "en" = "en") {
   const targetIds = ["loc-A", "loc-B", "loc-C", "loc-D"];
   const routeGraph: WarehouseGraph = {
     ...sampleWarehouse,
@@ -37,8 +72,8 @@ function setupReplay() {
   );
 
   const rendered = render(
-    <LanguageProvider initialLanguage="en">
-      <RouteSimulationReplay
+    <LanguageProvider initialLanguage={language}>
+      <RouteSimulationComparison
         graph={sampleWarehouse}
         visitIds={matrix.visitIds}
         pathMatrix={matrix.pathMatrix}
@@ -52,80 +87,201 @@ function setupReplay() {
   return { ...rendered, worker, recommended, workerTimeline, recommendedTimeline };
 }
 
-describe("RouteSimulationReplay", () => {
-  test("starts paused at zero with one worker-route SVG viewport and no autoplay", () => {
-    const { container, workerTimeline } = setupReplay();
+function installAnimationFrameHarness() {
+  let nextId = 1;
+  const callbacks = new Map<number, FrameRequestCallback>();
+  vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => {
+    const id = nextId++;
+    callbacks.set(id, callback);
+    return id;
+  }));
+  vi.stubGlobal("cancelAnimationFrame", vi.fn((id: number) => callbacks.delete(id)));
+
+  return {
+    run(timestamp: number) {
+      const entry = callbacks.entries().next().value as [number, FrameRequestCallback] | undefined;
+      if (!entry) throw new Error("No animation frame is scheduled");
+      callbacks.delete(entry[0]);
+      act(() => entry[1](timestamp));
+    },
+    pendingCount: () => callbacks.size,
+  };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("shared comparison state", () => {
+  test("uses the longer physical timeline as the shared duration", () => {
+    expect(getSharedComparisonDuration(linearTimeline(100), linearTimeline(60))).toBe(100);
+    expect(getSharedComparisonDuration(linearTimeline(60), linearTimeline(100))).toBe(100);
+  });
+
+  test("projects both timelines from the same shared time while each keeps its own state", () => {
+    const snapshots = getSharedComparisonSnapshots(linearTimeline(100), linearTimeline(60), 40);
+    expect(snapshots.worker.timeSeconds).toBe(40);
+    expect(snapshots.recommended.timeSeconds).toBe(40);
+    expect(snapshots.worker.current?.progress).toBe(0.4);
+    expect(snapshots.recommended.current?.progress).toBeCloseTo(2 / 3);
+  });
+
+  test("clamps the shorter route while the longer route continues", () => {
+    const snapshots = getSharedComparisonSnapshots(linearTimeline(100), linearTimeline(60), 80);
+    expect(snapshots.worker.timeSeconds).toBe(80);
+    expect(snapshots.worker.isComplete).toBe(false);
+    expect(snapshots.recommended.timeSeconds).toBe(60);
+    expect(snapshots.recommended.isComplete).toBe(true);
+    expect(snapshots.recommended.current).toBeNull();
+  });
+
+  test("both routes are complete at the shared maximum", () => {
+    const snapshots = getSharedComparisonSnapshots(linearTimeline(100), linearTimeline(60), 100);
+    expect(snapshots.worker.isComplete).toBe(true);
+    expect(snapshots.recommended.isComplete).toBe(true);
+  });
+});
+
+describe("RouteSimulationComparison", () => {
+  test("starts paused with two reusable viewports, two markers, and one control set", () => {
+    const { container, workerTimeline, recommendedTimeline } = setupComparison();
     const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
 
-    expect(screen.getByRole("heading", { name: "Route replay" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Worker vs recommended route replay" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Play" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Reset" })).toHaveLength(1);
     expect(seek.value).toBe("0");
-    expect(Number(seek.max)).toBe(workerTimeline.totalDurationSeconds);
-    expect(container.querySelectorAll("svg")).toHaveLength(1);
-    expect(container.querySelector('[data-route="worker"]')).not.toBeNull();
-    expect(container.querySelector('[data-route="recommended"]')).toBeNull();
-    expect(container.querySelector('[data-testid="simulation-marker"]')?.getAttribute("transform")).toBe(
-      `translate(${sampleWarehouse.start.x + NN_OFFSET.x} ${sampleWarehouse.start.y + NN_OFFSET.y})`,
+    expect(Number(seek.max)).toBe(Math.max(
+      workerTimeline.totalDurationSeconds,
+      recommendedTimeline.totalDurationSeconds,
+    ));
+    expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(2);
+    expect(container.querySelectorAll(".route-simulation-viewport")).toHaveLength(2);
+    expect(container.querySelectorAll("svg")).toHaveLength(2);
+    expect(container.querySelectorAll('[data-testid="simulation-marker"]')).toHaveLength(2);
+    expect(screen.getAllByText("Ready")).toHaveLength(2);
+    expect(screen.queryByText("Route to replay")).toBeNull();
+    expect(container.querySelectorAll('input[type="radio"]')).toHaveLength(0);
+  });
+
+  test("makes the controlled comparison conditions explicit", () => {
+    setupComparison();
+    expect(
+      screen.getByText("Same warehouse · Same locations · Same start · Same walking speed · Same clock"),
+    ).toBeTruthy();
+    expect(screen.getByText("Only the route sequence differs.")).toBeTruthy();
+  });
+
+  test("shared seek moves both markers forward and backward from one time source", () => {
+    const { container, workerTimeline, recommendedTimeline } = setupComparison();
+    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+    const markerTransforms = () =>
+      [...container.querySelectorAll('[data-testid="simulation-marker"]')].map((marker) =>
+        marker.getAttribute("transform"),
+      );
+    const start = markerTransforms();
+    const sharedDuration = Math.max(
+      workerTimeline.totalDurationSeconds,
+      recommendedTimeline.totalDurationSeconds,
     );
+
+    fireEvent.change(seek, { target: { value: sharedDuration * 0.5 } });
+    const forward = markerTransforms();
+    expect(forward[0]).not.toBe(start[0]);
+    expect(forward[1]).not.toBe(start[1]);
+
+    fireEvent.change(seek, { target: { value: sharedDuration * 0.1 } });
+    const backward = markerTransforms();
+    expect(backward[0]).not.toBe(forward[0]);
+    expect(backward[1]).not.toBe(forward[1]);
   });
 
-  test("seeking forward and backward deterministically moves the same marker", () => {
-    const { container, workerTimeline } = setupReplay();
+  test("shorter recommended route completes and keeps its final marker while worker continues", () => {
+    const { container, recommended, workerTimeline, recommendedTimeline } = setupComparison();
+    expect(workerTimeline.totalDurationSeconds).toBeGreaterThan(
+      recommendedTimeline.totalDurationSeconds,
+    );
     const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
-    const marker = () =>
-      container.querySelector('[data-testid="simulation-marker"]')?.getAttribute("transform");
-    const startPosition = marker();
+    const sharedTime = (workerTimeline.totalDurationSeconds + recommendedTimeline.totalDurationSeconds) / 2;
+    fireEvent.change(seek, { target: { value: sharedTime } });
 
-    fireEvent.change(seek, { target: { value: workerTimeline.totalDurationSeconds * 0.8 } });
-    const forwardPosition = marker();
-    expect(forwardPosition).not.toBe(startPosition);
-
-    fireEvent.change(seek, { target: { value: workerTimeline.totalDurationSeconds * 0.2 } });
-    const backwardPosition = marker();
-    expect(backwardPosition).not.toBe(forwardPosition);
-    expect(Number(seek.value)).toBeCloseTo(workerTimeline.totalDurationSeconds * 0.2);
-  });
-
-  test("route mode switch resets and pauses, preserves rate, and swaps the one route implementation", () => {
-    const { container, workerTimeline, recommendedTimeline } = setupReplay();
-    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
-
-    fireEvent.click(screen.getByRole("button", { name: "10×" }));
-    fireEvent.change(seek, { target: { value: workerTimeline.totalDurationSeconds / 2 } });
-    fireEvent.click(screen.getByLabelText("System recommended route"));
-
-    expect(seek.value).toBe("0");
-    expect(Number(seek.max)).toBe(recommendedTimeline.totalDurationSeconds);
-    expect(screen.getByRole("button", { name: "10×" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
-    expect(container.querySelectorAll("svg")).toHaveLength(1);
-    expect(container.querySelector('[data-route="worker"]')).toBeNull();
-    expect(container.querySelector('[data-route="recommended"]')).not.toBeNull();
-  });
-
-  test("completion keeps the marker on the active route's final destination", () => {
-    const { container, recommended, recommendedTimeline } = setupReplay();
-    fireEvent.click(screen.getByLabelText("System recommended route"));
-    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
-    fireEvent.change(seek, { target: { value: recommendedTimeline.totalDurationSeconds } });
+    const workerViewport = container.querySelector('[data-simulation-viewport="worker"]')!;
+    const recommendedViewport = container.querySelector('[data-simulation-viewport="recommended"]')!;
+    expect(workerViewport.textContent).toContain("In progress");
+    expect(recommendedViewport.textContent).toContain("Completed");
 
     const finalLocation = sampleWarehouse.locations.find(
       (location) => location.id === recommended.order.at(-1),
     )!;
-    expect(container.querySelector('[data-testid="simulation-marker"]')?.getAttribute("transform")).toBe(
-      `translate(${finalLocation.x + OPT_OFFSET.x} ${finalLocation.y + OPT_OFFSET.y})`,
-    );
-    expect((screen.getByRole("button", { name: "Play" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      recommendedViewport.querySelector('[data-testid="simulation-marker"]')?.getAttribute("transform"),
+    ).toBe(`translate(${finalLocation.x + OPT_OFFSET.x} ${finalLocation.y + OPT_OFFSET.y})`);
   });
 
-  test("shows snapshot/timeline ratios and all required playback-rate presets", () => {
-    setupReplay();
+  test("reset returns both routes to ready at zero and preserves playback rate", () => {
+    const { container, workerTimeline, recommendedTimeline } = setupComparison();
+    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+    const sharedDuration = Math.max(
+      workerTimeline.totalDurationSeconds,
+      recommendedTimeline.totalDurationSeconds,
+    );
 
-    expect(screen.getByText(/0:00 \/ \d+:/)).toBeTruthy();
-    expect(screen.getByText(/0 m \/ [\d,.]+ m/)).toBeTruthy();
-    expect(screen.getByText("0 / 4")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "10×" }));
+    fireEvent.change(seek, { target: { value: sharedDuration / 2 } });
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    expect(seek.value).toBe("0");
+    expect(screen.getAllByText("Ready")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "10×" }).getAttribute("aria-pressed")).toBe("true");
+    const markers = container.querySelectorAll('[data-testid="simulation-marker"]');
+    expect(markers[0].getAttribute("transform")).toContain("-16.5 -11.5");
+    expect(markers[1].getAttribute("transform")).toContain("-13.5 -8.5");
+  });
+
+  test("one RAF loop advances the shared clock after the short route completes", () => {
+    const frames = installAnimationFrameHarness();
+    const { container, workerTimeline, recommendedTimeline } = setupComparison();
+    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+
+    fireEvent.click(screen.getByRole("button", { name: "10×" }));
+    fireEvent.change(seek, { target: { value: recommendedTimeline.totalDurationSeconds - 1 } });
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    expect(frames.pendingCount()).toBe(1);
+    frames.run(1_000);
+    frames.run(1_200);
+
+    expect(Number(seek.value)).toBeGreaterThan(recommendedTimeline.totalDurationSeconds);
+    expect(Number(seek.value)).toBeLessThan(workerTimeline.totalDurationSeconds);
+    expect(container.querySelector('[data-simulation-viewport="recommended"]')?.textContent).toContain(
+      "Completed",
+    );
+    expect(container.querySelector('[data-simulation-viewport="worker"]')?.textContent).toContain(
+      "In progress",
+    );
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(frames.pendingCount()).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    expect(frames.pendingCount()).toBe(0);
+  });
+
+  test("shows route-specific duration and KPI truth without changing it at 10x", () => {
+    const { workerTimeline, recommendedTimeline } = setupComparison();
+    expect(screen.getAllByText("Route duration")).toHaveLength(2);
+    expect(screen.getAllByText("0 / 4")).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "10×" }));
+    expect(workerTimeline.walkingSpeedMetersPerMinute).toBe(60);
+    expect(recommendedTimeline.walkingSpeedMetersPerMinute).toBe(60);
     for (const label of ["0.5×", "1×", "2×", "5×", "10×"]) {
       expect(screen.getByRole("button", { name: label })).toBeTruthy();
     }
+  });
+
+  test("renders the comparison explanation and statuses in Korean", () => {
+    setupComparison("ko");
+    expect(screen.getByText("방문 경로 순서만 다릅니다.")).toBeTruthy();
+    expect(screen.getAllByText("준비")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "재생" })).toBeTruthy();
   });
 });
