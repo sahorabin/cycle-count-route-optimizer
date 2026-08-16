@@ -1,10 +1,9 @@
 import { Canvas, useThree } from "@react-three/fiber";
-import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { OrthographicCamera, Quaternion, Vector3 } from "three";
+import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { InstancedMesh, Object3D, OrthographicCamera, Quaternion, Vector3 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { RouteTimeline, WarehouseGraph } from "../domain/types";
 import type { SimulationSnapshot } from "../simulation/types";
-import { computeRackRects } from "../ui/rackLayout";
 import {
   clampWarehouseCameraZoom,
   createWarehouseCameraChannel,
@@ -18,8 +17,14 @@ import {
   type WarehouseLocationDetailLevel,
 } from "../ui/warehouse3dCamera";
 import {
+  buildWarehouse3DEnvironment,
+  getWarehouseEnvironmentDetailLevel,
+  getWarehouseEnvironmentRenderSet,
+  type Warehouse3DEnvironment,
+  type WarehouseEnvironmentBoxVisual,
+} from "../ui/warehouse3dEnvironment";
+import {
   createWarehouse3DTransform,
-  projectDisplayPointToWarehouse3D,
   projectNodeToWarehouse3D,
   projectSimulationMarkerTo3D,
   type Warehouse3DTransform,
@@ -165,57 +170,149 @@ function InteractiveWarehouseCamera({
   return null;
 }
 
-function WarehouseFloor({ transform }: { transform: Warehouse3DTransform }) {
-  const width = (transform.maxX - transform.minX) * transform.visualScale + 2;
-  const depth = (transform.maxY - transform.minY) * transform.visualScale + 2;
-  const gridSize = Math.max(width, depth);
+interface InstancedEnvironmentBoxesProps {
+  visuals: readonly WarehouseEnvironmentBoxVisual[];
+  color: string;
+  roughness?: number;
+  metalness?: number;
+  opacity?: number;
+  emissive?: string;
+  emissiveIntensity?: number;
+}
+
+function InstancedEnvironmentBoxes({
+  visuals,
+  color,
+  roughness = 0.9,
+  metalness = 0,
+  opacity = 1,
+  emissive,
+  emissiveIntensity = 0,
+}: InstancedEnvironmentBoxesProps) {
+  const meshRef = useRef<InstancedMesh>(null);
+  const { invalidate } = useThree();
+
+  useLayoutEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    const matrixSource = new Object3D();
+    visuals.forEach((visual, index) => {
+      matrixSource.position.set(...visual.center);
+      matrixSource.scale.set(...visual.size);
+      matrixSource.updateMatrix();
+      mesh.setMatrixAt(index, matrixSource.matrix);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+    invalidate();
+  }, [invalidate, visuals]);
+
+  if (visuals.length === 0) return null;
+
+  return (
+    <instancedMesh ref={meshRef} args={[undefined, undefined, visuals.length]}>
+      <boxGeometry args={[1, 1, 1]} />
+      <meshStandardMaterial
+        color={color}
+        roughness={roughness}
+        metalness={metalness}
+        transparent={opacity < 1}
+        opacity={opacity}
+        depthWrite={opacity >= 1}
+        emissive={emissive}
+        emissiveIntensity={emissiveIntensity}
+      />
+    </instancedMesh>
+  );
+}
+
+const WarehouseFloor = memo(function WarehouseFloor({
+  environment,
+}: { environment: Warehouse3DEnvironment }) {
+  const { floor, perimeterMarkings } = environment.boundary;
+  const aisleZones = environment.aisles.map((aisle) => aisle.zone);
+  const aisleMarkings = environment.aisles.flatMap((aisle) => aisle.markings);
 
   return (
     <>
-      <mesh position={[0, -0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[width, depth]} />
-        <meshStandardMaterial color="#edf2f4" roughness={0.95} />
-      </mesh>
-      <gridHelper args={[gridSize, 16, "#cbd5e1", "#dfe6ec"]} position={[0, -0.02, 0]} />
+      <InstancedEnvironmentBoxes visuals={[floor]} color="#dce3e6" roughness={1} />
+      <InstancedEnvironmentBoxes visuals={aisleZones} color="#e9eef0" roughness={1} />
+      <InstancedEnvironmentBoxes visuals={aisleMarkings} color="#d1a93c" roughness={0.85} />
+      <InstancedEnvironmentBoxes visuals={perimeterMarkings} color="#c08b2c" roughness={0.85} />
     </>
   );
-}
+});
 
-function WarehouseRacks({ graph, transform }: {
-  graph: WarehouseGraph;
-  transform: Warehouse3DTransform;
-}) {
-  const racks = useMemo(
-    () => computeRackRects(graph.aisleNodes).flatMap((rect) => {
-      const aisleGap = rect.width / 2;
-      const rackWidth = (rect.width - aisleGap) / 2;
-      const centerY = rect.y + rect.height / 2;
-      return [
-        rect.x + rackWidth / 2,
-        rect.x + rect.width - rackWidth / 2,
-      ].map((centerX) => ({
-        center: projectDisplayPointToWarehouse3D({ x: centerX, y: centerY }, transform),
-        width: rackWidth * transform.visualScale,
-        depth: rect.height * transform.visualScale,
-      }));
-    }),
-    [graph.aisleNodes, transform],
-  );
-
-  return racks.map((rack, index) => (
-    <mesh
-      key={index}
-      position={[rack.center.x, WAREHOUSE_3D_VISUALS.rack.height / 2, rack.center.z]}
-    >
-      <boxGeometry args={[rack.width, WAREHOUSE_3D_VISUALS.rack.height, rack.depth]} />
-      <meshStandardMaterial
-        color={WAREHOUSE_3D_VISUALS.rack.color}
-        roughness={WAREHOUSE_3D_VISUALS.rack.roughness}
-        metalness={0}
+const WarehouseShell = memo(function WarehouseShell({
+  environment,
+}: { environment: Warehouse3DEnvironment }) {
+  return (
+    <>
+      <InstancedEnvironmentBoxes
+        visuals={environment.boundary.walls}
+        color="#c7d1d6"
+        roughness={0.94}
+        opacity={0.46}
       />
-    </mesh>
-  ));
-}
+      <InstancedEnvironmentBoxes
+        visuals={environment.boundary.columns}
+        color="#7f8b93"
+        roughness={0.82}
+        metalness={0.08}
+      />
+      <InstancedEnvironmentBoxes
+        visuals={environment.boundary.overheadFixtures}
+        color="#e7eff0"
+        roughness={0.4}
+        emissive="#d9e8ea"
+        emissiveIntensity={0.55}
+      />
+    </>
+  );
+});
+
+const WarehouseRacks = memo(function WarehouseRacks({
+  environment,
+  detailLevel,
+}: {
+  environment: Warehouse3DEnvironment;
+  detailLevel: WarehouseLocationDetailLevel;
+}) {
+  const renderSet = useMemo(
+    () => getWarehouseEnvironmentRenderSet(environment, detailLevel),
+    [detailLevel, environment],
+  );
+  const uprights = renderSet.rackMembers.filter((visual) => visual.kind === "rack-upright");
+  const beams = renderSet.rackMembers.filter((visual) => visual.kind === "rack-beam");
+  const shelves = renderSet.rackMembers.filter((visual) => visual.kind === "rack-shelf");
+  const pallets = renderSet.storageProps.filter((visual) => visual.kind === "pallet");
+  const cartons = renderSet.storageProps.filter((visual) => visual.kind === "carton");
+
+  return (
+    <>
+      <InstancedEnvironmentBoxes
+        visuals={uprights}
+        color="#66757e"
+        roughness={0.78}
+        metalness={0.16}
+      />
+      <InstancedEnvironmentBoxes
+        visuals={beams}
+        color="#7e8c94"
+        roughness={0.8}
+        metalness={0.12}
+      />
+      <InstancedEnvironmentBoxes
+        visuals={shelves}
+        color="#aeb9be"
+        roughness={0.9}
+        opacity={0.76}
+      />
+      <InstancedEnvironmentBoxes visuals={pallets} color="#806f5a" roughness={1} />
+      <InstancedEnvironmentBoxes visuals={cartons} color="#a58d6c" roughness={0.96} />
+    </>
+  );
+});
 
 function WarehouseLocations({ graph, timeline, transform, color, detailLevel }: {
   graph: WarehouseGraph;
@@ -452,12 +549,17 @@ function Warehouse3DScene({
   cameraInstanceId,
 }: Warehouse3DSceneProps) {
   const transform = useMemo(() => createWarehouse3DTransform(graph), [graph]);
+  const environment = useMemo(
+    () => buildWarehouse3DEnvironment(graph, transform),
+    [graph, transform],
+  );
   const color = ROUTE_COLORS[mode];
   const workerPoint = useMemo(
     () => projectSimulationMarkerTo3D(graph, timeline, snapshot, transform),
     [graph, snapshot, timeline, transform],
   );
   const [detailLevel, setDetailLevel] = useState<WarehouseLocationDetailLevel>("overview");
+  const environmentDetailLevel = getWarehouseEnvironmentDetailLevel(detailLevel, cameraPreset);
   const handleDetailLevelChange = useCallback((nextLevel: WarehouseLocationDetailLevel) => {
     setDetailLevel((currentLevel) => currentLevel === nextLevel ? currentLevel : nextLevel);
   }, []);
@@ -473,11 +575,12 @@ function Warehouse3DScene({
         workerPoint={workerPoint}
         onDetailLevelChange={handleDetailLevelChange}
       />
-      <color attach="background" args={["#f7fafc"]} />
-      <ambientLight intensity={1.2} />
-      <directionalLight position={[8, 14, 10]} intensity={1.5} />
-      <WarehouseFloor transform={transform} />
-      <WarehouseRacks graph={graph} transform={transform} />
+      <color attach="background" args={["#eef3f5"]} />
+      <hemisphereLight args={["#f7fbfc", "#7d898e", 1.35]} />
+      <directionalLight position={[8, 14, 10]} intensity={1.25} />
+      <WarehouseFloor environment={environment} />
+      <WarehouseShell environment={environment} />
+      <WarehouseRacks environment={environment} detailLevel={environmentDetailLevel} />
       <WarehouseLocations
         graph={graph}
         timeline={timeline}
