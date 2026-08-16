@@ -1,5 +1,11 @@
 import type { WarehouseGraph } from "../domain/types";
-import { computeRackRects, type RackRect } from "./rackLayout";
+import {
+  computeRackRects,
+  computeWarehouseAisleRects,
+  type RackRect,
+  type WarehouseAisleCategory,
+  type WarehouseAisleRect,
+} from "./rackLayout";
 import {
   projectDisplayPointToWarehouse3D,
   type Warehouse3DTransform,
@@ -53,6 +59,7 @@ export interface WarehousePropVisual extends WarehouseEnvironmentBoxVisual {
 export interface WarehouseAisleVisual {
   /** Neutral renderer id; it does not claim an operational aisle identifier. */
   readonly id: string;
+  readonly category: WarehouseAisleCategory;
   readonly zone: WarehouseEnvironmentBoxVisual;
   readonly markings: readonly WarehouseEnvironmentBoxVisual[];
 }
@@ -254,43 +261,33 @@ function buildRackVisual(
 
 function buildAisleVisual(
   id: string,
-  rect: RackRect,
+  rect: WarehouseAisleRect,
   transform: Warehouse3DTransform,
 ): WarehouseAisleVisual {
-  const rackWidth = rect.width / 4;
-  const gapStartX = rect.x + rackWidth;
-  const gapWidth = rect.width / 2;
-  const worldRect = toWorldRect({
-    x: gapStartX,
-    y: rect.y,
-    width: gapWidth,
-    height: rect.height,
-  }, transform);
+  const worldRect = toWorldRect(rect, transform);
   const centerX = (worldRect.minX + worldRect.maxX) / 2;
   const centerZ = (worldRect.minZ + worldRect.maxZ) / 2;
   const width = worldRect.maxX - worldRect.minX;
   const depth = worldRect.maxZ - worldRect.minZ;
-  const markingWidth = Math.min(0.045, width * 0.08);
-  const markings = [worldRect.minX, worldRect.maxX].map((x, index) => box(
-    `${id}-edge-${index}`,
-    "aisle-marking",
-    [x, -0.008, centerZ],
-    [markingWidth, 0.012, depth],
-  ));
-
-  const dashCount = Math.max(3, Math.min(6, Math.round(depth / 1.7)));
-  const dashDepth = depth / (dashCount * 2);
-  for (let index = 0; index < dashCount; index += 1) {
-    markings.push(box(
-      `${id}-center-${index}`,
-      "aisle-marking",
-      [centerX, -0.006, worldRect.minZ + (index * 2 + 1) * dashDepth],
-      [markingWidth * 0.7, 0.014, dashDepth],
-    ));
-  }
+  const markingWidth = Math.min(0.045, Math.min(width, depth) * 0.08);
+  const vertical = rect.orientation === "vertical";
+  const markings = vertical
+    ? [worldRect.minX, worldRect.maxX].map((x, index) => box(
+        `${id}-edge-${index}`,
+        "aisle-marking",
+        [x, -0.008, centerZ],
+        [markingWidth, 0.012, depth],
+      ))
+    : [worldRect.minZ, worldRect.maxZ].map((z, index) => box(
+        `${id}-edge-${index}`,
+        "aisle-marking",
+        [centerX, -0.008, z],
+        [width, 0.012, markingWidth],
+      ));
 
   return {
     id,
+    category: rect.category,
     zone: box(
       `${id}-zone`,
       "aisle-zone",
@@ -376,12 +373,13 @@ export function buildWarehouse3DEnvironment(
   graph: WarehouseGraph,
   transform: Warehouse3DTransform,
 ): Warehouse3DEnvironment {
-  const sourceRects = computeRackRects(graph.aisleNodes);
+  const sourceRects = computeRackRects(graph.aisleNodes, 10, graph.spatialLayout);
+  const aisleRects = computeWarehouseAisleRects(graph.aisleNodes, graph.spatialLayout);
   const racks: WarehouseRackVisual[] = [];
   const props: WarehousePropVisual[] = [];
 
   sourceRects.forEach((rect, aisleIndex) => {
-    const aisleGap = rect.width / 2;
+    const aisleGap = graph.spatialLayout?.localAisleSpacing ?? rect.width / 2;
     const rackWidth = (rect.width - aisleGap) / 2;
     const rowRects = [
       { x: rect.x, y: rect.y, width: rackWidth, height: rect.height },
@@ -398,7 +396,7 @@ export function buildWarehouse3DEnvironment(
   return {
     racks,
     props,
-    aisles: sourceRects.map((rect, index) => buildAisleVisual(`lane-${index}`, rect, transform)),
+    aisles: aisleRects.map((rect, index) => buildAisleVisual(`lane-${index}`, rect, transform)),
     boundary: buildBoundary(transform),
   };
 }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { largeWarehouse } from "../data/largeWarehouse";
 import { sampleWarehouse } from "../data/sampleWarehouse";
-import { computeRackRects } from "./rackLayout";
+import { computeRackRects, computeWarehouseAisleRects } from "./rackLayout";
 import { createWarehouse3DTransform, projectDisplayPointToWarehouse3D } from "./warehouse3dProjection";
 import {
   buildWarehouse3DEnvironment,
@@ -40,7 +40,9 @@ describe("warehouse3dEnvironment", () => {
     const second = buildWarehouse3DEnvironment(largeWarehouse, transform);
 
     expect(second).toEqual(first);
-    expect(first.racks.length).toBe(computeRackRects(largeWarehouse.aisleNodes).length * 2);
+    expect(first.racks.length).toBe(
+      computeRackRects(largeWarehouse.aisleNodes, 10, largeWarehouse.spatialLayout).length * 2,
+    );
     expect(first.racks.every((rack) => rack.overviewMembers.length > 0)).toBe(true);
     expect(first.racks.every((rack) => rack.closeMembers.length > 0)).toBe(true);
   });
@@ -48,8 +50,12 @@ describe("warehouse3dEnvironment", () => {
   test("preserves both halves of every existing rack footprint", () => {
     const transform = createWarehouse3DTransform(largeWarehouse);
     const environment = buildWarehouse3DEnvironment(largeWarehouse, transform);
-    const expectedFootprints = computeRackRects(largeWarehouse.aisleNodes).flatMap((rect) => {
-      const rackWidth = rect.width / 4;
+    const expectedFootprints = computeRackRects(
+      largeWarehouse.aisleNodes,
+      10,
+      largeWarehouse.spatialLayout,
+    ).flatMap((rect) => {
+      const rackWidth = (rect.width - largeWarehouse.spatialLayout!.localAisleSpacing) / 2;
       return [rect.x, rect.x + rect.width - rackWidth].map((x) => {
         const first = projectDisplayPointToWarehouse3D({ x, y: rect.y }, transform);
         const second = projectDisplayPointToWarehouse3D({
@@ -156,12 +162,40 @@ describe("warehouse3dEnvironment", () => {
       createWarehouse3DTransform(largeWarehouse),
     );
 
-    expect(environment.aisles.length).toBe(computeRackRects(largeWarehouse.aisleNodes).length);
+    const sharedAisles = computeWarehouseAisleRects(
+      largeWarehouse.aisleNodes,
+      largeWarehouse.spatialLayout,
+    );
+    expect(environment.aisles).toHaveLength(sharedAisles.length);
+    expect(environment.aisles.map(({ category }) => category))
+      .toEqual(sharedAisles.map(({ category }) => category));
+    expect(environment.aisles.filter(({ category }) => category === "local")).toHaveLength(30);
+    expect(environment.aisles.filter(({ category }) => category === "internal-cross")).toHaveLength(4);
+    expect(environment.aisles.filter(({ category }) => category === "block-separation")).toHaveLength(1);
     expect(environment.aisles.every((aisle) => aisle.id.startsWith("lane-"))).toBe(true);
     expect(environment.aisles.every((aisle) => aisle.markings.length >= 2)).toBe(true);
     expect(environment.boundary.walls).toHaveLength(3);
     expect(environment.boundary.columns.length).toBeGreaterThan(0);
     expect(environment.boundary.overheadFixtures.length).toBeGreaterThan(0);
+  });
+
+  test("keeps every physical rack footprint out of shared aisle floor space", () => {
+    const environment = buildWarehouse3DEnvironment(
+      largeWarehouse,
+      createWarehouse3DTransform(largeWarehouse),
+    );
+
+    for (const rack of environment.racks) {
+      for (const aisle of environment.aisles) {
+        const [x, , z] = aisle.zone.center;
+        const [width, , depth] = aisle.zone.size;
+        const overlapX = Math.min(rack.footprint.maxX, x + width / 2)
+          - Math.max(rack.footprint.minX, x - width / 2);
+        const overlapZ = Math.min(rack.footprint.maxZ, z + depth / 2)
+          - Math.max(rack.footprint.minZ, z - depth / 2);
+        expect(overlapX > 1e-9 && overlapZ > 1e-9).toBe(false);
+      }
+    }
   });
 
   test("never generates NaN or infinite environment coordinates", () => {

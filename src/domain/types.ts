@@ -40,11 +40,32 @@ export interface CycleCountLocation extends AttachmentPoint {
   aisle?: string;
 }
 
+export interface WarehouseRackSegment {
+  readonly startY: number;
+  readonly endY: number;
+}
+
+/**
+ * Optional renderer-facing structure for demo warehouses whose rack blocks
+ * contain more than one rack run. Routing still uses only `edges.length` and
+ * attachment `accessDistance`; these values let SVG and 3D depict the same
+ * local aisles, internal cross-aisles, and block separations.
+ */
+export interface WarehouseSpatialLayout {
+  readonly rackWidth: number;
+  readonly localAisleSpacing: number;
+  readonly rackSegments: readonly WarehouseRackSegment[];
+  readonly internalCrossAisleSpacing: number;
+  readonly aislesPerBlock: number;
+  readonly blockSeparation: number;
+}
+
 export interface WarehouseGraph {
   aisleNodes: AisleNode[];
   edges: AisleEdge[];
   start: AttachmentPoint;
   locations: CycleCountLocation[];
+  spatialLayout?: WarehouseSpatialLayout;
 }
 
 /**

@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { expandRoutePath } from "../ui/routePath";
 import { buildCoordinateLookup, NN_OFFSET, OPT_OFFSET, pointsAttribute, type Point } from "../ui/svgPoints";
-import { computeRackRects } from "../ui/rackLayout";
+import { computeRackRects, computeWarehouseAisleRects } from "../ui/rackLayout";
 import type { CycleCountLocation, NodeId, RouteComputation, WarehouseGraph } from "../domain/types";
 import { useTranslation } from "../i18n/useTranslation";
 
@@ -163,7 +163,16 @@ export function WarehouseMap({
   const titleId = useId();
   const coords = useMemo(() => buildCoordinateLookup(graph), [graph]);
   const viewBox = useMemo(() => computeViewBox([...coords.values()]), [coords]);
-  const rackRects = useMemo(() => computeRackRects(graph.aisleNodes), [graph.aisleNodes]);
+  const rackRects = useMemo(
+    () => computeRackRects(graph.aisleNodes, 10, graph.spatialLayout),
+    [graph.aisleNodes, graph.spatialLayout],
+  );
+  const aisleRects = useMemo(
+    () => graph.spatialLayout
+      ? computeWarehouseAisleRects(graph.aisleNodes, graph.spatialLayout)
+      : [],
+    [graph.aisleNodes, graph.spatialLayout],
+  );
   // The viewBox is already fit tightly to the warehouse's real extent
   // (computeViewBox above); matching the container's aspect ratio to it is
   // what keeps the rendered map from being letterboxed inside a taller,
@@ -248,6 +257,20 @@ export function WarehouseMap({
               height={rect.height}
               rx={1.2}
               className="warehouse-map__rack"
+            />
+          ))}
+        </g>
+
+        <g className="warehouse-map__spatial-aisles" aria-hidden="true">
+          {aisleRects.map((rect, index) => (
+            <rect
+              key={`aisle-${rect.category}-${index}`}
+              x={rect.x}
+              y={rect.y}
+              width={rect.width}
+              height={rect.height}
+              className={`warehouse-map__spatial-aisle warehouse-map__spatial-aisle--${rect.category}`}
+              data-aisle-category={rect.category}
             />
           ))}
         </g>

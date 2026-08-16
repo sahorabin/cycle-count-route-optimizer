@@ -7,6 +7,7 @@ import { buildValidatedDistanceMatrix } from "../domain/distanceMatrix";
 import { nearestNeighborRoute } from "../domain/nearestNeighbor";
 import { twoOptRoute } from "../domain/twoOpt";
 import { sampleWarehouse } from "../data/sampleWarehouse";
+import { largeWarehouse } from "../data/largeWarehouse";
 import type { NodeId, WarehouseGraph } from "../domain/types";
 import { expandRoutePath } from "../ui/routePath";
 import { buildCoordinateLookup, NN_OFFSET, OPT_OFFSET, pointsAttribute } from "../ui/svgPoints";
@@ -260,6 +261,30 @@ describe("WarehouseMap", () => {
     const { container } = setup([], new Set());
     const racks = container.querySelectorAll(".warehouse-map__rack");
     expect(racks.length).toBeGreaterThan(0);
+  });
+
+  test("renders the large warehouse's shared spatial hierarchy", () => {
+    const { container } = render(
+      <LanguageProvider initialLanguage="en">
+        <WarehouseMap
+          graph={largeWarehouse}
+          selected={new Set()}
+          visitIds={[largeWarehouse.start.id]}
+          pathMatrix={[[[largeWarehouse.start.id]]]}
+          workerRoute={null}
+          recommendedRoute={null}
+          routeVisibility="both"
+          manualStopIds={[]}
+          completedIds={new Set()}
+          searchMatchIds={new Set()}
+          onLocationClick={() => {}}
+        />
+      </LanguageProvider>,
+    );
+
+    expect(container.querySelectorAll('[data-aisle-category="local"]')).toHaveLength(30);
+    expect(container.querySelectorAll('[data-aisle-category="internal-cross"]')).toHaveLength(4);
+    expect(container.querySelectorAll('[data-aisle-category="block-separation"]')).toHaveLength(1);
   });
 
   test("does not render the raw aisle-node routing graph -- only racks, office, bins, and route lines", () => {

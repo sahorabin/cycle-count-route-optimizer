@@ -393,6 +393,22 @@
   stroke: var(--border);
   stroke-width: 0.4;
 }
+.warehouse-map__spatial-aisle {
+  stroke-width: 0.35;
+  pointer-events: none;
+}
+.warehouse-map__spatial-aisle--local {
+  fill: #eef3f4;
+  stroke: #cbd7da;
+}
+.warehouse-map__spatial-aisle--internal-cross {
+  fill: #e4edef;
+  stroke: #b9c9cd;
+}
+.warehouse-map__spatial-aisle--block-separation {
+  fill: #d9e5e8;
+  stroke: #a8bdc2;
+}
 
 /* Mobile: default to a zoomed-in, horizontally scrollable floor plan
    instead of shrinking the whole warehouse to fit 375px -- markers,

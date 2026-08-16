@@ -62,10 +62,10 @@ describe("App (Phase 5 dashboard)", () => {
     fireEvent.click(screen.getByRole("radio", { name: "English" }));
 
     selectLocation("Zone A - Bin 01");
-    selectLocation("Zone A - Bin 02");
+    selectLocation("Zone A - Bin 03");
 
     clickOnMap("Zone A - Bin 01");
-    clickOnMap("Zone A - Bin 02");
+    clickOnMap("Zone A - Bin 03");
 
     fireEvent.click(screen.getByRole("button", { name: "Generate recommended route" }));
 

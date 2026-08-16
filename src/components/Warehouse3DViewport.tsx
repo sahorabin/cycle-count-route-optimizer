@@ -34,6 +34,11 @@ import {
   WAREHOUSE_3D_VISUALS,
   type Warehouse3DRouteVisualSegment,
 } from "../ui/warehouse3dVisuals";
+import {
+  createWarehouseWorkerPose,
+  createWarehouseWorkerVisual,
+  type WarehouseWorkerVisualPart,
+} from "../ui/warehouse3dWorker";
 import type { ReplayRouteMode } from "./RouteSimulationReplay";
 
 interface Warehouse3DViewportProps {
@@ -230,13 +235,23 @@ const WarehouseFloor = memo(function WarehouseFloor({
   environment,
 }: { environment: Warehouse3DEnvironment }) {
   const { floor, perimeterMarkings } = environment.boundary;
-  const aisleZones = environment.aisles.map((aisle) => aisle.zone);
+  const localAisles = environment.aisles
+    .filter((aisle) => aisle.category === "local")
+    .map((aisle) => aisle.zone);
+  const internalCrossAisles = environment.aisles
+    .filter((aisle) => aisle.category === "internal-cross")
+    .map((aisle) => aisle.zone);
+  const blockSeparations = environment.aisles
+    .filter((aisle) => aisle.category === "block-separation")
+    .map((aisle) => aisle.zone);
   const aisleMarkings = environment.aisles.flatMap((aisle) => aisle.markings);
 
   return (
     <>
       <InstancedEnvironmentBoxes visuals={[floor]} color="#dce3e6" roughness={1} />
-      <InstancedEnvironmentBoxes visuals={aisleZones} color="#e9eef0" roughness={1} />
+      <InstancedEnvironmentBoxes visuals={localAisles} color="#e9eef0" roughness={1} />
+      <InstancedEnvironmentBoxes visuals={internalCrossAisles} color="#dfe9eb" roughness={1} />
+      <InstancedEnvironmentBoxes visuals={blockSeparations} color="#d5e2e5" roughness={1} />
       <InstancedEnvironmentBoxes visuals={aisleMarkings} color="#d1a93c" roughness={0.85} />
       <InstancedEnvironmentBoxes visuals={perimeterMarkings} color="#c08b2c" roughness={0.85} />
     </>
@@ -474,6 +489,53 @@ function RouteTrail({ graph, timeline, transform, color }: {
   );
 }
 
+function WorkerVisualPartMesh({ part }: { part: WarehouseWorkerVisualPart }) {
+  const material = (
+    <meshStandardMaterial
+      color={part.color}
+      roughness={part.role === "equipment" ? 0.62 : 0.78}
+      metalness={part.role === "equipment" ? 0.1 : 0}
+      depthTest={false}
+      depthWrite={false}
+    />
+  );
+
+  if (part.primitive === "sphere") {
+    return (
+      <mesh
+        position={part.position}
+        rotation={part.rotation}
+        scale={part.scale}
+        renderOrder={5}
+      >
+        <sphereGeometry args={[part.radius, 12, 10]} />
+        {material}
+      </mesh>
+    );
+  }
+
+  if (part.primitive === "cylinder") {
+    return (
+      <mesh position={part.position} rotation={part.rotation} renderOrder={5}>
+        <cylinderGeometry args={[
+          part.topRadius,
+          part.bottomRadius,
+          part.height,
+          12,
+        ]} />
+        {material}
+      </mesh>
+    );
+  }
+
+  return (
+    <mesh position={part.position} rotation={part.rotation} renderOrder={5}>
+      <boxGeometry args={part.size} />
+      {material}
+    </mesh>
+  );
+}
+
 function WorkerMarker({ graph, timeline, snapshot, transform, color }: {
   graph: WarehouseGraph;
   timeline: RouteTimeline;
@@ -481,13 +543,14 @@ function WorkerMarker({ graph, timeline, snapshot, transform, color }: {
   transform: Warehouse3DTransform;
   color: string;
 }) {
-  const marker = useMemo(
-    () => projectSimulationMarkerTo3D(graph, timeline, snapshot, transform),
+  const pose = useMemo(
+    () => createWarehouseWorkerPose(graph, timeline, snapshot, transform),
     [graph, snapshot, timeline, transform],
   );
+  const visual = useMemo(() => createWarehouseWorkerVisual(color), [color]);
 
   return (
-    <group position={[marker.x, 0, marker.z]}>
+    <group position={[pose.position.x, 0, pose.position.z]}>
       <mesh
         position={[0, 0.05, 0]}
         rotation={[-Math.PI / 2, 0, 0]}
@@ -508,19 +571,12 @@ function WorkerMarker({ graph, timeline, snapshot, transform, color }: {
         ]} />
         <meshBasicMaterial color={color} depthTest={false} depthWrite={false} />
       </mesh>
-      <mesh position={[0, WAREHOUSE_3D_VISUALS.worker.bodyY, 0]} renderOrder={5}>
-        <cylinderGeometry args={[
-          WAREHOUSE_3D_VISUALS.worker.bodyTopRadius,
-          WAREHOUSE_3D_VISUALS.worker.bodyBottomRadius,
-          WAREHOUSE_3D_VISUALS.worker.bodyHeight,
-          12,
-        ]} />
-        <meshBasicMaterial color={color} depthTest={false} depthWrite={false} />
-      </mesh>
-      <mesh position={[0, WAREHOUSE_3D_VISUALS.worker.headY, 0]} renderOrder={5}>
-        <sphereGeometry args={[WAREHOUSE_3D_VISUALS.worker.headRadius, 12, 10]} />
-        <meshBasicMaterial color="#f4c7a1" depthTest={false} depthWrite={false} />
-      </mesh>
+      <group
+        rotation={[0, pose.yawRadians, 0]}
+        scale={[visual.figureScale, visual.figureScale, visual.figureScale]}
+      >
+        {visual.parts.map((part) => <WorkerVisualPartMesh key={part.id} part={part} />)}
+      </group>
     </group>
   );
 }

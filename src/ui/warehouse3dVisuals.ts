@@ -33,10 +33,10 @@ export const WAREHOUSE_3D_VISUALS = {
     ringOuterRadius: 0.6,
     bodyTopRadius: 0.22,
     bodyBottomRadius: 0.28,
-    bodyHeight: 0.78,
-    bodyY: 0.54,
-    headRadius: 0.25,
-    headY: 1.18,
+    bodyHeight: 0.58,
+    bodyY: 0.98,
+    headRadius: 0.22,
+    headY: 1.46,
   },
 } as const;
 
