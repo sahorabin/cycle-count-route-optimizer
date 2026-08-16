@@ -4,6 +4,10 @@ import { useTranslation } from "../i18n/useTranslation";
 import type { SimulationSnapshot } from "../simulation/types";
 import { projectSimulationMarkerToSvg } from "../ui/simulationMarker";
 import { NN_OFFSET, OPT_OFFSET } from "../ui/svgPoints";
+import type {
+  WarehouseCameraChannel,
+  WarehouseCameraPreset,
+} from "../ui/warehouse3dCamera";
 import { WarehouseMap } from "./WarehouseMap";
 
 const Warehouse3DViewport = lazy(async () => {
@@ -27,6 +31,11 @@ interface RouteSimulationViewportProps {
   snapshot: SimulationSnapshot;
   mode: ReplayRouteMode;
   rendererMode: SimulationRendererMode;
+  cameraPreset?: WarehouseCameraPreset;
+  cameraResetRequest?: number;
+  cameraChannel?: WarehouseCameraChannel;
+  cameraAuthority?: boolean;
+  viewMode?: "compare" | "explore";
 }
 
 function formatReplayTime(totalSeconds: number): string {
@@ -60,6 +69,11 @@ export function RouteSimulationViewport({
   snapshot,
   mode,
   rendererMode,
+  cameraPreset,
+  cameraResetRequest,
+  cameraChannel,
+  cameraAuthority,
+  viewMode = "compare",
 }: RouteSimulationViewportProps) {
   const { t } = useTranslation();
   const viewportId = useId();
@@ -106,7 +120,7 @@ export function RouteSimulationViewport({
 
   return (
     <article
-      className={`route-simulation-viewport route-simulation-viewport--${mode}`}
+      className={`route-simulation-viewport route-simulation-viewport--${mode} route-simulation-viewport--${viewMode}`}
       data-simulation-viewport={mode}
       aria-labelledby={`${viewportId}-title`}
     >
@@ -129,6 +143,10 @@ export function RouteSimulationViewport({
             timeline={input.timeline}
             snapshot={snapshot}
             mode={mode}
+            cameraPreset={cameraPreset}
+            cameraResetRequest={cameraResetRequest}
+            cameraChannel={cameraChannel}
+            cameraAuthority={cameraAuthority}
             accessibleLabel={
               mode === "worker" ? t("replay.canvas.worker") : t("replay.canvas.recommended")
             }

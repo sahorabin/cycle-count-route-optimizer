@@ -149,7 +149,7 @@ describe("RouteSimulationComparison", () => {
 
     expect(screen.getByRole("heading", { name: "Worker vs recommended route replay" })).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Play" })).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: "Reset" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /^Reset$/ })).toHaveLength(1);
     expect(seek.value).toBe("0");
     expect(seek.min).toBe("0");
     expect(seek.step).toBe("1");
@@ -167,6 +167,66 @@ describe("RouteSimulationComparison", () => {
     expect(container.querySelectorAll('input[type="radio"]')).toHaveLength(0);
     expect(screen.getByRole("button", { name: "3D" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "2D" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("group", { name: "View" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Compare" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("group", { name: "Camera" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Overview" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Reset camera" })).toBeTruthy();
+  });
+
+  test("switches Compare and Explore routes without creating new playback truth", () => {
+    const frames = installAnimationFrameHarness();
+    const { container, workerTimeline, recommendedTimeline } = setupComparison();
+    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+    const sharedTime = Math.min(
+      40,
+      Math.max(workerTimeline.totalDurationSeconds, recommendedTimeline.totalDurationSeconds) / 2,
+    );
+    fireEvent.change(seek, { target: { value: sharedTime } });
+    fireEvent.click(screen.getByRole("button", { name: "5×" }));
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    expect(frames.pendingCount()).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+    expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(1);
+    expect(container.querySelector('[data-simulation-viewport="worker"]')).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Route to inspect" })).toBeTruthy();
+    expect(seek.value).toBe(String(sharedTime));
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "5×" }).getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: /^System recommended route$/ }));
+    expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(1);
+    expect(container.querySelector('[data-simulation-viewport="recommended"]')).toBeTruthy();
+    expect(seek.value).toBe(String(sharedTime));
+    expect(frames.pendingCount()).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+    expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(2);
+    expect(seek.value).toBe(String(sharedTime));
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(frames.pendingCount()).toBe(1);
+  });
+
+  test("hides 3D-only controls in 2D and restores Explore without resetting playback state", () => {
+    const { container } = setupComparison();
+    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+    fireEvent.change(seek, { target: { value: 30 } });
+    fireEvent.click(screen.getByRole("button", { name: "10×" }));
+    fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+    expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "2D" }));
+    expect(screen.queryByRole("group", { name: "View" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Camera" })).toBeNull();
+    expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(2);
+    expect(seek.value).toBe("30");
+    expect(screen.getByRole("button", { name: "10×" }).getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "3D" }));
+    expect(screen.getByRole("button", { name: "Explore" }).getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(1);
+    expect(seek.value).toBe("30");
   });
 
   test("switches both renderers without resetting shared time, playback state, rate, or snapshots", () => {
@@ -348,5 +408,10 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getAllByText("준비")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "재생" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "창고 보기" })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "보기 방식" })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "카메라" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "카메라 초기화" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "탐색" }));
+    expect(screen.getByRole("group", { name: "탐색할 경로" })).toBeTruthy();
   });
 });

@@ -999,10 +999,58 @@
   font-weight: 600 !important;
 }
 .route-simulation-comparison__rates button[aria-pressed="true"],
-.route-simulation-comparison__renderer-modes button[aria-pressed="true"] {
+.route-simulation-comparison__renderer-modes button[aria-pressed="true"],
+.route-simulation-comparison__view-modes button[aria-pressed="true"],
+.route-simulation-comparison__explore-routes button[aria-pressed="true"],
+.route-simulation-comparison__camera-presets button[aria-pressed="true"] {
   border-color: var(--target-selected);
   color: var(--target-selected);
   font-weight: 700;
+}
+.route-simulation-comparison__camera-controls {
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3) var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.route-simulation-comparison__view-modes,
+.route-simulation-comparison__explore-routes,
+.route-simulation-comparison__camera-presets {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.route-simulation-comparison__view-modes > div,
+.route-simulation-comparison__explore-routes > div,
+.route-simulation-comparison__camera-presets > div {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.route-simulation-comparison__view-modes legend,
+.route-simulation-comparison__explore-routes legend,
+.route-simulation-comparison__camera-presets legend {
+  margin-bottom: var(--space-1);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.route-simulation-comparison__camera-presets {
+  flex: 1 1 360px;
+}
+.route-simulation-comparison__camera-reset {
+  margin-left: auto;
+}
+.route-simulation-comparison__camera-help {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 .route-simulation-comparison__viewports {
   min-width: 0;
@@ -1010,6 +1058,9 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-4);
   align-items: start;
+}
+.route-simulation-comparison__viewports--explore {
+  grid-template-columns: minmax(0, 1fr);
 }
 .route-simulation-viewport {
   min-width: 0;
@@ -1063,6 +1114,14 @@
 }
 .warehouse-3d canvas {
   display: block;
+  cursor: grab;
+  touch-action: none;
+}
+.warehouse-3d canvas:active {
+  cursor: grabbing;
+}
+.route-simulation-viewport--explore .warehouse-3d {
+  height: clamp(420px, 52vw, 620px);
 }
 .warehouse-3d__fallback {
   min-width: 0;
@@ -1121,6 +1180,9 @@
   .warehouse-3d {
     height: 320px;
   }
+  .route-simulation-viewport--explore .warehouse-3d {
+    height: 460px;
+  }
 }
 
 /* Technical details -- intentionally demoted, collapsed by default. */
@@ -1172,7 +1234,10 @@
   }
   .route-simulation-comparison__transport button,
   .route-simulation-comparison__renderer-modes button,
-  .route-simulation-comparison__rates button {
+  .route-simulation-comparison__rates button,
+  .route-simulation-comparison__view-modes button,
+  .route-simulation-comparison__explore-routes button,
+  .route-simulation-comparison__camera-presets button {
     min-height: 44px;
   }
   .route-simulation-comparison__seek input[type="range"] {
@@ -1184,5 +1249,11 @@
   }
   .warehouse-3d {
     height: 270px;
+  }
+  .route-simulation-viewport--explore .warehouse-3d {
+    height: 380px;
+  }
+  .route-simulation-comparison__camera-reset {
+    margin-left: 0;
   }
 }

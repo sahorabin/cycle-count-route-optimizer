@@ -1,9 +1,22 @@
 import { Canvas, useThree } from "@react-three/fiber";
-import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { OrthographicCamera, Quaternion, Vector3 } from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { RouteTimeline, WarehouseGraph } from "../domain/types";
 import type { SimulationSnapshot } from "../simulation/types";
 import { computeRackRects } from "../ui/rackLayout";
+import {
+  clampWarehouseCameraZoom,
+  createWarehouseCameraChannel,
+  createWarehouseCameraPresetView,
+  getWarehouseLocationDetailLevel,
+  shouldRenderWarehouseLocation,
+  WAREHOUSE_CAMERA_LIMITS,
+  type WarehouseCameraChannel,
+  type WarehouseCameraPreset,
+  type WarehouseCameraView,
+  type WarehouseLocationDetailLevel,
+} from "../ui/warehouse3dCamera";
 import {
   createWarehouse3DTransform,
   projectDisplayPointToWarehouse3D,
@@ -25,6 +38,10 @@ interface Warehouse3DViewportProps {
   mode: ReplayRouteMode;
   accessibleLabel: string;
   fallback: ReactNode;
+  cameraPreset?: WarehouseCameraPreset;
+  cameraResetRequest?: number;
+  cameraChannel?: WarehouseCameraChannel;
+  cameraAuthority?: boolean;
 }
 
 const ROUTE_COLORS: Record<ReplayRouteMode, string> = {
@@ -33,22 +50,117 @@ const ROUTE_COLORS: Record<ReplayRouteMode, string> = {
 };
 const TARGET_WORLD_SPAN = 20;
 
-function FixedComparisonCamera() {
-  const { camera, size, invalidate } = useThree();
+interface InteractiveWarehouseCameraProps {
+  preset: WarehouseCameraPreset;
+  resetRequest: number;
+  channel: WarehouseCameraChannel;
+  authority: boolean;
+  instanceId: string;
+  workerPoint: { readonly x: number; readonly y: number; readonly z: number };
+  onDetailLevelChange: (level: WarehouseLocationDetailLevel) => void;
+}
+
+function InteractiveWarehouseCamera({
+  preset,
+  resetRequest,
+  channel,
+  authority,
+  instanceId,
+  workerPoint,
+  onDetailLevelChange,
+}: InteractiveWarehouseCameraProps) {
+  const { camera, gl, size, invalidate } = useThree();
+  const controlsRef = useRef<OrbitControls | null>(null);
+  const applyingViewRef = useRef(false);
+  const applyViewRef = useRef<((view: WarehouseCameraView) => void) | null>(null);
+  const latestPresetRef = useRef(preset);
+  const latestWorkerPointRef = useRef(workerPoint);
+  latestPresetRef.current = preset;
+  latestWorkerPointRef.current = workerPoint;
+  const baseZoom = Math.max(
+    1,
+    Math.min(size.width / (TARGET_WORLD_SPAN * 1.35), size.height / TARGET_WORLD_SPAN),
+  );
 
   useLayoutEffect(() => {
     if (!(camera instanceof OrthographicCamera)) return;
-    camera.position.set(15, 19, 15);
-    camera.lookAt(0, 0, 0);
-    camera.zoom = Math.max(
-      1,
-      Math.min(size.width / (TARGET_WORLD_SPAN * 1.35), size.height / TARGET_WORLD_SPAN),
-    );
+    const controls = new OrbitControls(camera, gl.domElement);
+    controls.enableRotate = true;
+    controls.enableZoom = true;
+    controls.enablePan = true;
+    controls.enableDamping = false;
+    controls.minPolarAngle = WAREHOUSE_CAMERA_LIMITS.minPolarAngle;
+    controls.maxPolarAngle = WAREHOUSE_CAMERA_LIMITS.maxPolarAngle;
+    controls.minZoom = baseZoom * WAREHOUSE_CAMERA_LIMITS.minZoomRatio;
+    controls.maxZoom = baseZoom * WAREHOUSE_CAMERA_LIMITS.maxZoomRatio;
     camera.near = 0.1;
     camera.far = 100;
-    camera.updateProjectionMatrix();
-    invalidate();
-  }, [camera, invalidate, size.height, size.width]);
+
+    const updateDetailLevel = () => {
+      onDetailLevelChange(getWarehouseLocationDetailLevel(camera.zoom, baseZoom));
+    };
+    const applyView = (view: WarehouseCameraView) => {
+      applyingViewRef.current = true;
+      controls.target.set(...view.target);
+      camera.position.set(...view.position);
+      camera.zoom = clampWarehouseCameraZoom(view.zoom, baseZoom);
+      camera.lookAt(...view.target);
+      camera.updateProjectionMatrix();
+      controls.update();
+      updateDetailLevel();
+      invalidate();
+      applyingViewRef.current = false;
+    };
+    applyViewRef.current = applyView;
+    controlsRef.current = controls;
+
+    const publishInteraction = () => {
+      if (applyingViewRef.current) return;
+      const previousTarget = controls.target.clone();
+      controls.target.set(
+        Math.min(WAREHOUSE_CAMERA_LIMITS.targetExtent, Math.max(-WAREHOUSE_CAMERA_LIMITS.targetExtent, controls.target.x)),
+        0,
+        Math.min(WAREHOUSE_CAMERA_LIMITS.targetExtent, Math.max(-WAREHOUSE_CAMERA_LIMITS.targetExtent, controls.target.z)),
+      );
+      camera.position.add(controls.target.clone().sub(previousTarget));
+      camera.zoom = clampWarehouseCameraZoom(camera.zoom, baseZoom);
+      camera.updateProjectionMatrix();
+      updateDetailLevel();
+      channel.publish({
+        preset: latestPresetRef.current,
+        position: [camera.position.x, camera.position.y, camera.position.z],
+        target: [controls.target.x, controls.target.y, controls.target.z],
+        zoom: camera.zoom,
+      }, instanceId);
+      invalidate();
+    };
+    controls.addEventListener("change", publishInteraction);
+    const unsubscribe = channel.subscribe((view, sourceId) => {
+      if (sourceId !== instanceId) applyView(view);
+    });
+
+    const existingView = channel.getView();
+    if (existingView) applyView(existingView);
+
+    return () => {
+      unsubscribe();
+      controls.removeEventListener("change", publishInteraction);
+      controls.dispose();
+      controlsRef.current = null;
+      applyViewRef.current = null;
+    };
+  }, [baseZoom, camera, channel, gl.domElement, instanceId, invalidate, onDetailLevelChange]);
+
+  useLayoutEffect(() => {
+    if (!authority || !controlsRef.current || !applyViewRef.current) return;
+    const view = createWarehouseCameraPresetView(
+      preset,
+      baseZoom,
+      latestWorkerPointRef.current,
+    );
+    applyViewRef.current(view);
+    channel.publish(view, instanceId);
+  }, [authority, baseZoom, channel, instanceId, preset, resetRequest]);
 
   return null;
 }
@@ -105,11 +217,12 @@ function WarehouseRacks({ graph, transform }: {
   ));
 }
 
-function WarehouseLocations({ graph, timeline, transform, color }: {
+function WarehouseLocations({ graph, timeline, transform, color, detailLevel }: {
   graph: WarehouseGraph;
   timeline: RouteTimeline;
   transform: Warehouse3DTransform;
   color: string;
+  detailLevel: WarehouseLocationDetailLevel;
 }) {
   const routeIds = useMemo(() => new Set(timeline.order.slice(1)), [timeline.order]);
   const locations = useMemo(
@@ -121,7 +234,9 @@ function WarehouseLocations({ graph, timeline, transform, color }: {
     [graph, routeIds, transform],
   );
 
-  return locations.map(({ id, point, selected }) => selected ? (
+  return locations
+    .filter(({ selected }) => shouldRenderWarehouseLocation(selected, detailLevel))
+    .map(({ id, point, selected }) => selected ? (
     <group key={id} position={[point.x, 0, point.z]}>
       <mesh position={[0, 0.045, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[
@@ -150,7 +265,7 @@ function WarehouseLocations({ graph, timeline, transform, color }: {
       <sphereGeometry args={[0.065, 8, 6]} />
       <meshStandardMaterial color="#b7c1c9" roughness={0.85} />
     </mesh>
-  ));
+    ));
 }
 
 function OfficeMarker({ graph, transform }: {
@@ -313,22 +428,63 @@ function WorkerMarker({ graph, timeline, snapshot, transform, color }: {
   );
 }
 
-function Warehouse3DScene({ graph, timeline, snapshot, mode }: Omit<
-  Warehouse3DViewportProps,
-  "accessibleLabel" | "fallback"
->) {
+interface Warehouse3DSceneProps {
+  graph: WarehouseGraph;
+  timeline: RouteTimeline;
+  snapshot: SimulationSnapshot;
+  mode: ReplayRouteMode;
+  cameraPreset: WarehouseCameraPreset;
+  cameraResetRequest: number;
+  cameraChannel: WarehouseCameraChannel;
+  cameraAuthority: boolean;
+  cameraInstanceId: string;
+}
+
+function Warehouse3DScene({
+  graph,
+  timeline,
+  snapshot,
+  mode,
+  cameraPreset,
+  cameraResetRequest,
+  cameraChannel,
+  cameraAuthority,
+  cameraInstanceId,
+}: Warehouse3DSceneProps) {
   const transform = useMemo(() => createWarehouse3DTransform(graph), [graph]);
   const color = ROUTE_COLORS[mode];
+  const workerPoint = useMemo(
+    () => projectSimulationMarkerTo3D(graph, timeline, snapshot, transform),
+    [graph, snapshot, timeline, transform],
+  );
+  const [detailLevel, setDetailLevel] = useState<WarehouseLocationDetailLevel>("overview");
+  const handleDetailLevelChange = useCallback((nextLevel: WarehouseLocationDetailLevel) => {
+    setDetailLevel((currentLevel) => currentLevel === nextLevel ? currentLevel : nextLevel);
+  }, []);
 
   return (
     <>
-      <FixedComparisonCamera />
+      <InteractiveWarehouseCamera
+        preset={cameraPreset}
+        resetRequest={cameraResetRequest}
+        channel={cameraChannel}
+        authority={cameraAuthority}
+        instanceId={cameraInstanceId}
+        workerPoint={workerPoint}
+        onDetailLevelChange={handleDetailLevelChange}
+      />
       <color attach="background" args={["#f7fafc"]} />
       <ambientLight intensity={1.2} />
       <directionalLight position={[8, 14, 10]} intensity={1.5} />
       <WarehouseFloor transform={transform} />
       <WarehouseRacks graph={graph} transform={transform} />
-      <WarehouseLocations graph={graph} timeline={timeline} transform={transform} color={color} />
+      <WarehouseLocations
+        graph={graph}
+        timeline={timeline}
+        transform={transform}
+        color={color}
+        detailLevel={detailLevel}
+      />
       <OfficeMarker graph={graph} transform={transform} />
       <RouteTrail graph={graph} timeline={timeline} transform={transform} color={color} />
       <WorkerMarker
@@ -359,13 +515,24 @@ function canAttemptWebGL(): boolean {
 
 export function Warehouse3DViewport(props: Warehouse3DViewportProps) {
   const [webGLAvailable] = useState(canAttemptWebGL);
+  const localCameraChannel = useMemo(createWarehouseCameraChannel, []);
+  const cameraChannel = props.cameraChannel ?? localCameraChannel;
+  const cameraPreset = props.cameraPreset ?? "overview";
+  const cameraResetRequest = props.cameraResetRequest ?? 0;
+  const cameraAuthority = props.cameraAuthority ?? true;
+  const cameraInstanceId = `${useId()}-${props.mode}`;
 
   if (!webGLAvailable) {
     return <div className="warehouse-3d__fallback">{props.fallback}</div>;
   }
 
   return (
-    <div className="warehouse-3d" data-warehouse-3d={props.mode}>
+    <div
+      className="warehouse-3d"
+      data-warehouse-3d={props.mode}
+      data-camera-preset={cameraPreset}
+      data-camera-authority={String(cameraAuthority)}
+    >
       <Canvas
         role="img"
         aria-label={props.accessibleLabel}
@@ -374,7 +541,6 @@ export function Warehouse3DViewport(props: Warehouse3DViewportProps) {
         camera={{ position: [15, 19, 15], zoom: 10, near: 0.1, far: 100 }}
         dpr={[1, 1.5]}
         frameloop="demand"
-        events={() => ({ enabled: false, priority: 1 })}
         fallback={<div className="warehouse-3d__fallback">{props.fallback}</div>}
         gl={{ antialias: true, alpha: false, powerPreference: "low-power" }}
       >
@@ -383,6 +549,11 @@ export function Warehouse3DViewport(props: Warehouse3DViewportProps) {
           timeline={props.timeline}
           snapshot={props.snapshot}
           mode={props.mode}
+          cameraPreset={cameraPreset}
+          cameraResetRequest={cameraResetRequest}
+          cameraChannel={cameraChannel}
+          cameraAuthority={cameraAuthority}
+          cameraInstanceId={cameraInstanceId}
         />
       </Canvas>
     </div>

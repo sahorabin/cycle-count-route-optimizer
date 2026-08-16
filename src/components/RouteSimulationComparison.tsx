@@ -7,7 +7,12 @@ import {
   getSharedComparisonSnapshots,
 } from "../ui/sharedSimulationComparison";
 import {
+  createWarehouseCameraChannel,
+  type WarehouseCameraPreset,
+} from "../ui/warehouse3dCamera";
+import {
   RouteSimulationViewport,
+  type ReplayRouteMode,
   type ReplayRouteInput,
   type SimulationRendererMode,
 } from "./RouteSimulationReplay";
@@ -22,6 +27,19 @@ interface RouteSimulationComparisonProps {
 }
 
 const PLAYBACK_RATES = [0.5, 1, 2, 5, 10] as const;
+const CAMERA_PRESETS: readonly WarehouseCameraPreset[] = [
+  "overview",
+  "top",
+  "aisle",
+  "worker",
+];
+const CAMERA_PRESET_KEYS = {
+  overview: "replay.camera.overview",
+  top: "replay.camera.top",
+  aisle: "replay.camera.aisle",
+  worker: "replay.camera.worker",
+} as const;
+type SimulationViewMode = "compare" | "explore";
 
 function formatReplayTime(totalSeconds: number): string {
   const roundedSeconds = Math.max(0, Math.round(totalSeconds));
@@ -47,6 +65,11 @@ export function RouteSimulationComparison({
   const { t } = useTranslation();
   const comparisonId = useId();
   const [rendererMode, setRendererMode] = useState<SimulationRendererMode>("3d");
+  const [viewMode, setViewMode] = useState<SimulationViewMode>("compare");
+  const [exploreRoute, setExploreRoute] = useState<ReplayRouteMode>("worker");
+  const [cameraPreset, setCameraPreset] = useState<WarehouseCameraPreset>("overview");
+  const [cameraResetRequest, setCameraResetRequest] = useState(0);
+  const cameraChannel = useMemo(createWarehouseCameraChannel, []);
   const sharedDurationSeconds = getSharedComparisonDuration(
     worker.timeline,
     recommended.timeline,
@@ -69,6 +92,16 @@ export function RouteSimulationComparison({
       ),
     [playback.clock.timeSeconds, recommended.timeline, worker.timeline],
   );
+  const selectCameraPreset = (preset: WarehouseCameraPreset) => {
+    setCameraPreset(preset);
+    setCameraResetRequest((request) => request + 1);
+  };
+  const selectExploreRoute = (route: ReplayRouteMode) => {
+    setExploreRoute(route);
+    if (cameraPreset === "worker") {
+      setCameraResetRequest((request) => request + 1);
+    }
+  };
 
   return (
     <section className="route-simulation-comparison" aria-labelledby={`${comparisonId}-title`}>
@@ -171,25 +204,118 @@ export function RouteSimulationComparison({
         </div>
       </div>
 
-      <div className="route-simulation-comparison__viewports">
-        <RouteSimulationViewport
-          graph={graph}
-          visitIds={visitIds}
-          pathMatrix={pathMatrix}
-          input={worker}
-          snapshot={snapshots.worker}
-          mode="worker"
-          rendererMode={rendererMode}
-        />
-        <RouteSimulationViewport
-          graph={graph}
-          visitIds={visitIds}
-          pathMatrix={pathMatrix}
-          input={recommended}
-          snapshot={snapshots.recommended}
-          mode="recommended"
-          rendererMode={rendererMode}
-        />
+      {rendererMode === "3d" ? (
+        <div className="route-simulation-comparison__camera-controls">
+          <fieldset className="route-simulation-comparison__view-modes">
+            <legend>{t("replay.viewMode")}</legend>
+            <div>
+              {(["compare", "explore"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={viewMode === mode}
+                  onClick={() => setViewMode(mode)}
+                >
+                  {mode === "compare" ? t("replay.viewCompare") : t("replay.viewExplore")}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          {viewMode === "explore" ? (
+            <fieldset className="route-simulation-comparison__explore-routes">
+              <legend>{t("replay.exploreRoute")}</legend>
+              <div>
+                {(["worker", "recommended"] as const).map((route) => (
+                  <button
+                    key={route}
+                    type="button"
+                    aria-pressed={exploreRoute === route}
+                    onClick={() => selectExploreRoute(route)}
+                  >
+                    {route === "worker" ? t("comparison.manual") : t("comparison.recommended")}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+          ) : null}
+
+          <fieldset className="route-simulation-comparison__camera-presets">
+            <legend>{t("replay.camera")}</legend>
+            <div>
+              {CAMERA_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  aria-pressed={cameraPreset === preset}
+                  onClick={() => selectCameraPreset(preset)}
+                >
+                  {t(CAMERA_PRESET_KEYS[preset])}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="route-simulation-comparison__camera-reset"
+                onClick={() => setCameraResetRequest((request) => request + 1)}
+              >
+                {t("replay.camera.reset")}
+              </button>
+            </div>
+          </fieldset>
+          <p className="route-simulation-comparison__camera-help">
+            {t("replay.camera.help")}
+          </p>
+        </div>
+      ) : null}
+
+      <div
+        className={`route-simulation-comparison__viewports route-simulation-comparison__viewports--${rendererMode === "3d" ? viewMode : "compare"}`}
+      >
+        {rendererMode === "3d" && viewMode === "explore" ? (
+          <RouteSimulationViewport
+            graph={graph}
+            visitIds={visitIds}
+            pathMatrix={pathMatrix}
+            input={exploreRoute === "worker" ? worker : recommended}
+            snapshot={exploreRoute === "worker" ? snapshots.worker : snapshots.recommended}
+            mode={exploreRoute}
+            rendererMode={rendererMode}
+            cameraPreset={cameraPreset}
+            cameraResetRequest={cameraResetRequest}
+            cameraChannel={cameraChannel}
+            cameraAuthority
+            viewMode="explore"
+          />
+        ) : (
+          <>
+            <RouteSimulationViewport
+              graph={graph}
+              visitIds={visitIds}
+              pathMatrix={pathMatrix}
+              input={worker}
+              snapshot={snapshots.worker}
+              mode="worker"
+              rendererMode={rendererMode}
+              cameraPreset={cameraPreset}
+              cameraResetRequest={cameraResetRequest}
+              cameraChannel={cameraChannel}
+              cameraAuthority
+            />
+            <RouteSimulationViewport
+              graph={graph}
+              visitIds={visitIds}
+              pathMatrix={pathMatrix}
+              input={recommended}
+              snapshot={snapshots.recommended}
+              mode="recommended"
+              rendererMode={rendererMode}
+              cameraPreset={cameraPreset}
+              cameraResetRequest={cameraResetRequest}
+              cameraChannel={cameraChannel}
+              cameraAuthority={false}
+            />
+          </>
+        )}
       </div>
     </section>
   );

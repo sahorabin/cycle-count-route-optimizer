@@ -124,7 +124,7 @@ describe("Warehouse3DViewport", () => {
     expect(WAREHOUSE_3D_VISUALS.rack.color).toBe("#96a3ad");
   });
 
-  test("uses an accessible fixed orthographic demand Canvas with a capped DPR", () => {
+  test("uses an accessible interactive orthographic demand Canvas with a capped DPR", () => {
     vi.stubGlobal("WebGLRenderingContext", class WebGLRenderingContext {});
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
       getExtension: () => ({ loseContext: vi.fn() }),
@@ -145,7 +145,39 @@ describe("Warehouse3DViewport", () => {
     expect(canvas.getAttribute("data-orthographic")).toBe("true");
     expect(canvas.getAttribute("data-dpr")).toBe("[1,1.5]");
     expect(canvas.getAttribute("data-power-preference")).toBe("low-power");
+    expect(canvas.closest('[data-warehouse-3d="worker"]')?.getAttribute("data-camera-preset"))
+      .toBe("overview");
+    expect(canvas.closest('[data-warehouse-3d="worker"]')?.getAttribute("data-camera-authority"))
+      .toBe("true");
     expect(recordCanvasProps).toHaveBeenCalledTimes(1);
+  });
+
+  test("accepts renderer-only shared camera ownership without changing simulation inputs", () => {
+    vi.stubGlobal("WebGLRenderingContext", class WebGLRenderingContext {});
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      getExtension: () => ({ loseContext: vi.fn() }),
+    } as unknown as WebGLRenderingContext);
+    const before = JSON.stringify({ timeline, snapshot: getSimulationSnapshotAtTime(timeline, 0) });
+    render(
+      <Warehouse3DViewport
+        graph={sampleWarehouse}
+        timeline={timeline}
+        snapshot={getSimulationSnapshotAtTime(timeline, 0)}
+        mode="recommended"
+        cameraPreset="aisle"
+        cameraResetRequest={3}
+        cameraAuthority={false}
+        accessibleLabel="Recommended route interactive 3D warehouse"
+        fallback={<p>SVG fallback</p>}
+      />,
+    );
+    const wrapper = screen.getByRole("img", {
+      name: "Recommended route interactive 3D warehouse",
+    }).closest('[data-warehouse-3d="recommended"]');
+    expect(wrapper?.getAttribute("data-camera-preset")).toBe("aisle");
+    expect(wrapper?.getAttribute("data-camera-authority")).toBe("false");
+    expect(JSON.stringify({ timeline, snapshot: getSimulationSnapshotAtTime(timeline, 0) }))
+      .toBe(before);
   });
 
   test("renders the supplied SVG fallback when a WebGL context cannot initialize", () => {
