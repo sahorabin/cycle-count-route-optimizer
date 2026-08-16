@@ -1,5 +1,6 @@
 import { compareRoutes } from "./routeComparison";
 import type { RouteComputation } from "../domain/types";
+import { calculateWalkingDurationMinutes } from "../domain/walkingDuration";
 
 export interface DurationComparison {
   manualDistance: number;
@@ -28,8 +29,14 @@ export function compareManualToRecommended(
 ): DurationComparison {
   const { distanceSaved, improvementPct } = compareRoutes(manual, recommended);
 
-  const manualDurationMinutes = manual.totalDistance / walkingSpeedMetersPerMinute;
-  const recommendedDurationMinutes = recommended.totalDistance / walkingSpeedMetersPerMinute;
+  const manualDurationMinutes = calculateWalkingDurationMinutes(
+    manual.totalDistance,
+    walkingSpeedMetersPerMinute,
+  );
+  const recommendedDurationMinutes = calculateWalkingDurationMinutes(
+    recommended.totalDistance,
+    walkingSpeedMetersPerMinute,
+  );
 
   return {
     manualDistance: manual.totalDistance,

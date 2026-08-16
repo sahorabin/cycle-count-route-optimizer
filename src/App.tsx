@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { largeWarehouse } from "./data/largeWarehouse";
 import { buildValidatedDistanceMatrix } from "./domain/distanceMatrix";
+import type { DistanceMatrixResult } from "./domain/distanceMatrix";
 import { nearestNeighborRoute } from "./domain/nearestNeighbor";
+import { buildRouteTimeline } from "./domain/routeTimeline";
+import { buildRouteTraversal } from "./domain/routeTraversal";
 import { twoOptRoute } from "./domain/twoOpt";
 import type { NodeId, RouteComputation, WarehouseGraph } from "./domain/types";
 import { LanguageProvider } from "./i18n/LanguageContext";
@@ -16,6 +19,7 @@ import { ComparisonHero } from "./components/ComparisonHero";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { TechnicalDetails } from "./components/TechnicalDetails";
 import { WorkflowSteps, type WorkflowStep } from "./components/WorkflowSteps";
+import { RouteSimulationReplay, type ReplayRouteInput } from "./components/RouteSimulationReplay";
 import "./App.css";
 
 const KNOWN_LOCATION_IDS = new Set(largeWarehouse.locations.map((l) => l.id));
@@ -48,6 +52,8 @@ interface ManualRouteData {
   computation: RouteComputation | null;
   visitIds: NodeId[];
   pathMatrix: NodeId[][][];
+  matrix: DistanceMatrixResult | null;
+  routeGraph: WarehouseGraph | null;
 }
 
 /**
@@ -57,22 +63,31 @@ interface ManualRouteData {
  * distance-matrix computation per render, not two.
  */
 function computeManualRoute(graph: WarehouseGraph, stopIds: NodeId[]): ManualRouteData {
-  if (stopIds.length === 0) return { computation: null, visitIds: [], pathMatrix: [] };
+  if (stopIds.length === 0) {
+    return { computation: null, visitIds: [], pathMatrix: [], matrix: null, routeGraph: null };
+  }
   const order = [graph.start.id, ...stopIds];
   const routeGraph: WarehouseGraph = {
     ...graph,
     locations: graph.locations.filter((l) => stopIds.includes(l.id)),
   };
   try {
-    const { visitIds, distanceMatrix, pathMatrix } = buildValidatedDistanceMatrix(routeGraph);
+    const matrix = buildValidatedDistanceMatrix(routeGraph);
+    const { visitIds, distanceMatrix, pathMatrix } = matrix;
     const indexOf = new Map(visitIds.map((id, i) => [id, i]));
     let total = 0;
     for (let i = 0; i < order.length - 1; i++) {
       total += distanceMatrix[indexOf.get(order[i])!][indexOf.get(order[i + 1])!];
     }
-    return { computation: { order, totalDistance: total }, visitIds, pathMatrix };
+    return {
+      computation: { order, totalDistance: total },
+      visitIds,
+      pathMatrix,
+      matrix,
+      routeGraph,
+    };
   } catch {
-    return { computation: null, visitIds: [], pathMatrix: [] };
+    return { computation: null, visitIds: [], pathMatrix: [], matrix: null, routeGraph: null };
   }
 }
 
@@ -173,7 +188,44 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
     [manualRoute.stopIds],
   );
 
+  const replayInputs = useMemo<{
+    worker: ReplayRouteInput;
+    recommended: ReplayRouteInput;
+  } | null>(() => {
+    if (
+      !manualComputation ||
+      !recommendedComputation ||
+      !manualRouteData.matrix ||
+      !manualRouteData.routeGraph
+    ) {
+      return null;
+    }
+
+    const workerTraversal = buildRouteTraversal(
+      manualRouteData.routeGraph,
+      manualComputation,
+      manualRouteData.matrix,
+    );
+    const recommendedTraversal = buildRouteTraversal(
+      manualRouteData.routeGraph,
+      recommendedComputation,
+      manualRouteData.matrix,
+    );
+
+    return {
+      worker: {
+        route: manualComputation,
+        timeline: buildRouteTimeline(workerTraversal, walkingSpeed),
+      },
+      recommended: {
+        route: recommendedComputation,
+        timeline: buildRouteTimeline(recommendedTraversal, walkingSpeed),
+      },
+    };
+  }, [manualComputation, manualRouteData, recommendedComputation, walkingSpeed]);
+
   const currentStep = computeWorkflowStep(selected.size, manualRoute.stopIds.length);
+  const simulationInputKey = useMemo(() => [...selected].sort().join("|"), [selected]);
 
   function toggleSelected(id: NodeId) {
     setSelected((prev) => {
@@ -282,6 +334,17 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
 
         <TechnicalDetails graph={largeWarehouse} targetIds={manualRoute.stopIds} />
       </main>
+
+      {comparisonRequested && replayInputs ? (
+        <RouteSimulationReplay
+          graph={largeWarehouse}
+          visitIds={manualRouteData.visitIds}
+          pathMatrix={manualRouteData.pathMatrix}
+          simulationInputKey={simulationInputKey}
+          worker={replayInputs.worker}
+          recommended={replayInputs.recommended}
+        />
+      ) : null}
     </div>
   );
 }

@@ -64,6 +64,36 @@ describe("App (Phase 5 dashboard)", () => {
       "Both routes cover the same distance",
     );
     expect(document.querySelector(".comparison-hero__summary")!.textContent).not.toMatch(/saved/);
+    expect(screen.getByRole("heading", { name: "Route replay" })).toBeTruthy();
+    expect(document.querySelectorAll(".route-simulation-replay svg")).toHaveLength(1);
+  });
+
+  test("walking-speed and selected-location changes reset replay while preserving rate", () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    selectLocation("Zone A - Bin 01");
+    selectLocation("Zone B - Bin 03");
+    clickOnMap("Zone A - Bin 01");
+    clickOnMap("Zone B - Bin 03");
+    fireEvent.click(screen.getByRole("button", { name: "Generate recommended route" }));
+
+    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+    const originalDuration = Number(seek.max);
+    fireEvent.click(screen.getByRole("button", { name: "10×" }));
+    fireEvent.change(seek, { target: { value: originalDuration / 2 } });
+    fireEvent.change(screen.getByLabelText("Walking speed (metres/minute)"), {
+      target: { value: "30" },
+    });
+
+    expect(seek.value).toBe("0");
+    expect(Number(seek.max)).toBeCloseTo(originalDuration * 2);
+    expect(screen.getByRole("button", { name: "10×" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
+
+    fireEvent.change(seek, { target: { value: Number(seek.max) / 2 } });
+    selectLocation("Zone C - Bin 05");
+    expect(seek.value).toBe("0");
+    expect(screen.getByRole("button", { name: "10×" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   test("editing the route after generating a comparison hides it again until re-generated", () => {

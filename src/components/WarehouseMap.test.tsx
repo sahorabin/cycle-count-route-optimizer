@@ -32,6 +32,7 @@ interface SetupOverrides {
   searchMatchIds?: Set<NodeId>;
   routeVisibility?: RouteVisibility;
   onLocationClick?: (id: NodeId) => void;
+  simulationMarker?: { x: number; y: number } | null;
 }
 
 function setup(targetIds: string[], selected: Set<string>, overrides: SetupOverrides = {}) {
@@ -50,6 +51,7 @@ function setup(targetIds: string[], selected: Set<string>, overrides: SetupOverr
         manualStopIds={overrides.manualStopIds ?? []}
         completedIds={overrides.completedIds ?? new Set()}
         searchMatchIds={overrides.searchMatchIds ?? new Set()}
+        simulationMarker={overrides.simulationMarker}
         onLocationClick={overrides.onLocationClick ?? (() => {})}
       />
     </LanguageProvider>,
@@ -57,6 +59,19 @@ function setup(targetIds: string[], selected: Set<string>, overrides: SetupOverr
 }
 
 describe("WarehouseMap", () => {
+  test("renders an optional simulation marker at the supplied display coordinate", () => {
+    const { container } = setup([], new Set(), { simulationMarker: { x: 12.5, y: 34.75 } });
+    const marker = container.querySelector('[data-testid="simulation-marker"]');
+
+    expect(marker?.getAttribute("transform")).toBe("translate(12.5 34.75)");
+    expect(marker?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  test("does not render a simulation marker when none is supplied", () => {
+    const { container } = setup([], new Set());
+    expect(container.querySelector('[data-testid="simulation-marker"]')).toBeNull();
+  });
+
   test("the two routes are independently selectable by a stable attribute and carry distinct visual encodings", () => {
     const { container } = setup(
       ["loc-A", "loc-B", "loc-C", "loc-D"],

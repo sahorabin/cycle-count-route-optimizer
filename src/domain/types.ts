@@ -58,6 +58,63 @@ export interface RouteComputation {
   totalDistance: number;
 }
 
+/** One distance-bearing movement between adjacent nodes in an expanded route leg. */
+export interface RouteTraversalSegment {
+  readonly from: NodeId;
+  readonly to: NodeId;
+  readonly distance: number;
+}
+
+/** The existing shortest path and routing distance between two consecutive visit points. */
+export interface RouteTraversalLeg {
+  readonly from: NodeId;
+  readonly to: NodeId;
+  readonly path: readonly NodeId[];
+  readonly distance: number;
+  readonly segments: readonly RouteTraversalSegment[];
+}
+
+/**
+ * A route computation expanded into the exact aisle traversal supplied by a
+ * DistanceMatrixResult. It preserves the visit order and never adds a return
+ * leg or derives a route from display coordinates.
+ */
+export interface RouteTraversal {
+  readonly order: readonly NodeId[];
+  readonly legs: readonly RouteTraversalLeg[];
+  readonly totalDistance: number;
+}
+
+/** The deterministic time projection of one spatial traversal segment. */
+export interface RouteTimelineSegment {
+  readonly from: NodeId;
+  readonly to: NodeId;
+  readonly distance: number;
+  readonly startTimeSeconds: number;
+  readonly durationSeconds: number;
+  readonly endTimeSeconds: number;
+}
+
+/** Consecutive timeline segments belonging to one visit-to-visit leg. */
+export interface RouteTimelineLeg {
+  readonly from: NodeId;
+  readonly to: NodeId;
+  readonly distance: number;
+  readonly startTimeSeconds: number;
+  readonly durationSeconds: number;
+  readonly endTimeSeconds: number;
+  readonly segments: readonly RouteTimelineSegment[];
+}
+
+/** A walking-only temporal projection of a completed RouteTraversal. */
+export interface RouteTimeline {
+  readonly order: readonly NodeId[];
+  readonly walkingSpeedMetersPerMinute: number;
+  readonly legs: readonly RouteTimelineLeg[];
+  readonly totalDistance: number;
+  readonly totalDurationSeconds: number;
+}
+
 export type RouteMethod = "original" | "nearest-neighbor" | "two-opt";
 
 /**

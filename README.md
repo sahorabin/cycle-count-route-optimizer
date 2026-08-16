@@ -18,7 +18,9 @@ lets a worker pick today's count locations and build a visit order by
 clicking them on a floor-plan map, then computes a system-recommended route
 over the same stops and shows a side-by-side comparison — total distance,
 estimated time, and percentage improvement — using only aisle-constrained
-walking distance, never straight-line distance.
+walking distance, never straight-line distance. After generating the
+comparison, the worker can replay either route in the existing SVG warehouse
+view using the same deterministic simulation state.
 
 **This is a portfolio/demonstration project.** It runs entirely in the
 browser against one deterministic, synthetic 100-location warehouse layout
@@ -61,6 +63,11 @@ The UI is organized as one page with three sequential steps:
    distance, estimated time (from a configurable walking speed), and percent
    improvement.
 
+Once a comparison exists, the **Route replay** section displays one route at
+a time. The user can switch between the worker and recommended routes, play
+or pause, reset, seek in either direction, and choose a playback rate without
+changing the route's physical walking speed or duration.
+
 A location can also be marked complete once counted, and a compact progress
 panel tracks completed vs. remaining against a daily target count.
 
@@ -90,6 +97,42 @@ The "system recommended route" shown in the UI is nearest-neighbor refined
 by 2-opt. This is a reasonable heuristic combination, not a guarantee of the
 mathematically optimal route — the UI deliberately never claims otherwise.
 
+## Simulation architecture and completed phases
+
+The deterministic simulation and rendering pipeline is:
+
+```text
+RouteComputation
+→ RouteTraversal
+→ RouteTimeline
+→ SimulationSnapshot
+→ SVG renderer
+```
+
+`RouteTraversal` expands a computed stop order through the existing
+`pathMatrix`. `RouteTimeline` projects that traversal onto physical walking
+time. The pure simulation engine derives a complete `SimulationSnapshot` for
+any timeline time, and the SVG layer consumes that snapshot only to decide
+where to draw the worker marker. SVG coordinates never determine routing
+distance, elapsed time, progress, or KPI values.
+
+Completed simulation phases:
+
+- **S1 — RouteTraversal Foundation** — expands the fixed-start open route
+  into its validated aisle-by-aisle traversal.
+- **S2 — Deterministic RouteTimeline** — converts traversal distance into a
+  deterministic physical timeline using the current walking speed.
+- **S3 — Deterministic Simulation Engine** — projects any timeline time into
+  an immutable simulation snapshot and supplies pure playback-clock controls.
+- **S4 — SVG Simulation Replay** — connects the pure clock and snapshots to
+  the existing warehouse SVG through a reusable single-route replay UI.
+
+The next planned phase is **S5 — Side-by-Side Actual vs Recommended
+Shared-Clock Comparison**.
+
+3D rendering, Three.js, and React Three Fiber are **not implemented**. They
+belong to a later phase after S5.
+
 ## Key features
 
 - Click-to-build manual route on an SVG floor-plan map (rack blocks, aisle
@@ -98,6 +141,12 @@ mathematically optimal route — the UI deliberately never claims otherwise.
   in-route, completed
 - Worker route vs. system-recommended route comparison with a single-sentence
   savings summary, and a route-visibility toggle (worker / recommended / both)
+- A deterministic single-viewport SVG replay for either the worker/actual or
+  recommended route, with Play/Pause, Reset, bidirectional seek, and 0.5x,
+  1x, 2x, 5x, and 10x playback-rate presets
+- Replay status sourced from simulation truth: elapsed simulation time,
+  distance traveled, and completed locations
+- Responsive replay controls and warehouse viewport support on mobile
 - A collapsed "technical details" panel showing the raw Nearest Neighbor vs.
   2-opt output, kept separate from the primary worker/recommended comparison
 - A deterministic, generated 100-location fixture (10 zones × 10 bins) with
@@ -111,12 +160,16 @@ There is no external i18n library dependency.
 
 ## Persistence
 
-Target count, completed-location ids, language, and walking speed persist to
-`localStorage` (`src/persistence/persistedState.ts`). Each field is
+Target count, completed-location ids, language, walking speed, selected
+locations, manual-route stop order, and whether a comparison was generated
+persist to `localStorage` (`src/persistence/persistedState.ts`). Each field is
 validated independently on load and falls back to a default if malformed, so
-one corrupted field can't take down the rest of the saved state. Completed
-ids from storage are cross-checked against the live 100-location fixture, so
-an id from a since-changed fixture can never resurrect as "completed."
+one corrupted field can't take down the rest of the saved state. Stored ids
+are reconciled with the live 100-location fixture and current selection.
+
+Runtime simulation state is deliberately ephemeral. Current replay time,
+playing/paused state, playback rate, replay-route mode, snapshot completion,
+and marker position are not persisted.
 
 ## Responsive behavior
 
@@ -132,11 +185,20 @@ overflow.
 
 - React 19 + TypeScript
 - Vite 8 (build/dev server)
-- Vitest 4 + @testing-library/react (226 tests across 28 files at the time
-  of writing)
+- Vitest 4 + @testing-library/react (354 tests across 36 files)
 - oxlint (linting)
 - No backend, no external API calls, no runtime dependencies beyond React
   itself
+
+Current verified baseline:
+
+```text
+354 tests passed
+0 failed
+TypeScript PASS
+lint PASS
+production build PASS
+```
 
 ## Getting started
 
@@ -165,22 +227,24 @@ Run tests matching a name: `npx vitest run -t "nearest neighbor"`
 
 ## Project structure
 
-The app is split into three layers with a strict one-way dependency:
-**domain → ui → components** (domain code never imports from `ui/` or
-`components/`).
+The app keeps routing and simulation truth below its presentation adapters:
+**domain → simulation/UI adapters → React components**. Domain code never
+imports from `simulation/`, `ui/`, or `components/`; renderer code only
+consumes completed domain/simulation values.
 
 ```
 src/
-  domain/        Graph validation, Dijkstra, distance matrix, nearest-neighbor,
-                  2-opt, and the fixed-start-open-path route order contract
+  domain/        Graph validation, routing algorithms, fixed-start-open-path
+                  contract, RouteTraversal, and RouteTimeline
+  simulation/    Pure snapshot projection and playback-clock state operations
   ui/             Presentation-only helpers with no domain logic
                   (SVG coordinates, route-path expansion, comparison math,
-                  duration formatting, rack-layout geometry for the floor plan)
+                  simulation-marker projection, duration formatting, rack layout)
   components/     React components (map, selectors, route editor, comparison
-                  panel, progress panel, workflow steps, language switcher)
+                  panel, single-route replay, progress, workflow, language)
   i18n/           Translation context, dictionary, and hook
   persistence/     localStorage read/write with per-field validation
-  hooks/          Manual-route state (add/remove/reorder stops)
+  hooks/          Manual-route state and the React playback-frame adapter
   data/           The sample and 100-location warehouse fixtures
 ```
 
@@ -193,6 +257,10 @@ src/
 - No authentication, and no real-world GPS or indoor-positioning
   integration — location coordinates are display-only SVG positions, not
   real-world measurements.
+- Replay currently shows one route viewport at a time. Side-by-side
+  Actual-vs-Recommended playback with a shared clock is planned for S5.
+- No 3D/WebGL renderer is present; Three.js and React Three Fiber are reserved
+  for a later phase after S5.
 - The "technical details" panel (raw Nearest Neighbor vs. 2-opt) is
   intentionally left untranslated/unstyled as a transparency artifact, not a
   primary UI surface.
@@ -205,9 +273,9 @@ src/
 This project was built to demonstrate a few specific things end to end:
 
 - A clean separation between routing math (never touches pixels) and display
-  geometry (never touches distance) — enforced by the domain → ui →
-  components layering and exercised by a warehouse layout where the two
-  distance notions actually diverge.
+  geometry (never touches distance) — enforced by the one-way
+  domain/simulation-to-renderer flow and exercised by a warehouse layout
+  where the two distance notions actually diverge.
 - Test-driven development throughout: each domain module pairs a pure
   validator/compute function with a throwing "assert" wrapper, and both are
   covered by tests written alongside the implementation.

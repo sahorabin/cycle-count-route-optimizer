@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { expandRoutePath } from "../ui/routePath";
 import { buildCoordinateLookup, NN_OFFSET, OPT_OFFSET, pointsAttribute, type Point } from "../ui/svgPoints";
 import { computeRackRects } from "../ui/rackLayout";
@@ -18,6 +18,7 @@ interface WarehouseMapProps {
   manualStopIds: NodeId[];
   completedIds: ReadonlySet<NodeId>;
   searchMatchIds: ReadonlySet<NodeId>;
+  simulationMarker?: Point | null;
   onLocationClick: (id: NodeId) => void;
 }
 
@@ -155,9 +156,11 @@ export function WarehouseMap({
   manualStopIds,
   completedIds,
   searchMatchIds,
+  simulationMarker = null,
   onLocationClick,
 }: WarehouseMapProps) {
   const { t } = useTranslation();
+  const titleId = useId();
   const coords = useMemo(() => buildCoordinateLookup(graph), [graph]);
   const viewBox = useMemo(() => computeViewBox([...coords.values()]), [coords]);
   const rackRects = useMemo(() => computeRackRects(graph.aisleNodes), [graph.aisleNodes]);
@@ -231,9 +234,9 @@ export function WarehouseMap({
           viewBox={viewBox}
           style={{ aspectRatio: `${vbWidth} / ${vbHeight}` }}
           role="img"
-          aria-labelledby="warehouse-map-title"
+          aria-labelledby={titleId}
         >
-        <title id="warehouse-map-title">
+        <title id={titleId}>
           Warehouse floor plan: office, racks, aisles, cycle-count locations, and the worker/recommended routes
         </title>
 
@@ -323,6 +326,18 @@ export function WarehouseMap({
             {graph.start.label}
           </text>
         </g>
+
+        {simulationMarker ? (
+          <g
+            className="simulation-marker"
+            data-testid="simulation-marker"
+            aria-hidden="true"
+            transform={`translate(${simulationMarker.x} ${simulationMarker.y})`}
+          >
+            <circle className="simulation-marker__halo" r="13" />
+            <circle className="simulation-marker__dot" r="7" />
+          </g>
+        ) : null}
         </svg>
       </div>
 
