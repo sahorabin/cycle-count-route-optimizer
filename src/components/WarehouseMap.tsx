@@ -236,9 +236,7 @@ export function WarehouseMap({
           role="img"
           aria-labelledby={titleId}
         >
-        <title id={titleId}>
-          Warehouse floor plan: office, racks, aisles, cycle-count locations, and the worker/recommended routes
-        </title>
+        <title id={titleId}>{t("map.accessibleTitle")}</title>
 
         <g className="warehouse-map__racks">
           {rackRects.map((rect, index) => (
@@ -341,7 +339,7 @@ export function WarehouseMap({
         </svg>
       </div>
 
-      <ul className="warehouse-map__legend" aria-label="Map legend">
+      <ul className="warehouse-map__legend" aria-label={t("map.legendLabel")}>
         <li className="warehouse-map__legend-item">
           <span className="warehouse-map__swatch warehouse-map__swatch--office" aria-hidden="true" />
           {t("map.legend.office")}
@@ -379,7 +377,7 @@ export function WarehouseMap({
           routed), rather than always occupying space. */}
       {(workerPath.length > 1 || recommendedPath.length > 1) && (
         <div className="warehouse-map__route-legend">
-          <ul className="warehouse-map__legend" aria-label="Route line legend">
+          <ul className="warehouse-map__legend" aria-label={t("map.routeLegendLabel")}>
             {workerPath.length > 1 && (
               <li className="warehouse-map__legend-item">
                 <span

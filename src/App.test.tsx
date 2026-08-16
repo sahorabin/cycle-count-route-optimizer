@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, test, beforeEach } from "vitest";
+import { describe, expect, test, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import App from "./App";
 
@@ -16,6 +16,22 @@ function clickOnMap(label: string) {
 }
 
 describe("App (Phase 5 dashboard)", () => {
+  test("frames the product purpose and synthetic demo data in both languages", () => {
+    render(<App />);
+    expect(
+      screen.getByText("동일한 창고 조건에서 작업자 계획 경로와 시스템 추천 경로를 비교해 이동 거리와 작업 시간 절감 효과를 확인합니다."),
+    ).toBeTruthy();
+    expect(screen.getByText("데모 창고 · 합성 운영 데이터")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    expect(
+      screen.getByText(
+        "Compare a worker-planned cycle count route with the system recommendation under identical warehouse conditions to see the potential reduction in walking distance and work time.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Demo warehouse · Synthetic operational data")).toBeTruthy();
+  });
+
   test("defaults to Korean and shows all 100 locations available for selection", () => {
     render(<App />);
     expect(screen.getByText("100개 중 0개 선택됨")).toBeTruthy();
@@ -68,6 +84,48 @@ describe("App (Phase 5 dashboard)", () => {
       screen.getByRole("heading", { name: "Worker vs recommended route replay" }),
     ).toBeTruthy();
     expect(document.querySelectorAll(".route-simulation-comparison svg")).toHaveLength(2);
+  });
+
+  test("moves focus and scrolls to a valid generated result without autoplay", () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    selectLocation("Zone A - Bin 01");
+    selectLocation("Zone A - Bin 02");
+    clickOnMap("Zone A - Bin 01");
+    clickOnMap("Zone A - Bin 02");
+    fireEvent.click(screen.getByRole("button", { name: "Generate recommended route" }));
+
+    const result = document.querySelector(".comparison-hero") as HTMLElement;
+    expect(result.getAttribute("tabindex")).toBe("-1");
+    expect(document.activeElement).toBe(result);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+    expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
+
+    Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+  });
+
+  test("keeps invalid generation disabled and does not move focus", () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+
+    const generate = screen.getByRole("button", { name: "Generate recommended route" });
+    expect((generate as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(generate);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(document.querySelector(".comparison-hero__summary")).toBeNull();
+
+    Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
   });
 
   test("walking-speed and selected-location changes reset replay while preserving rate", () => {

@@ -50,10 +50,13 @@
 
 .app__header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-3);
   flex-wrap: wrap;
+}
+.app__identity h1 {
+  margin-bottom: 0;
 }
 
 /* Workflow steps -- a single-page indicator, not separate pages. */
@@ -103,6 +106,15 @@
   color: var(--text-muted);
   margin-top: var(--space-1);
   max-width: 62ch;
+}
+.app__demo-note {
+  display: inline-block;
+  margin: var(--space-2) 0 0;
+  padding: 3px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 /* The visit-order editor is a primary task, not secondary content below a
@@ -718,6 +730,13 @@
 .comparison-hero__column[data-role="recommended"] .comparison-hero__distance {
   color: var(--route-opt);
 }
+.comparison-hero__replay-cue {
+  margin: 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 13px;
+}
 
 /* Progress panel -- compact and visually secondary to the step hero above
    it: smaller padding and a de-emphasized heading, since it's a status
@@ -1150,6 +1169,15 @@
   }
   .route-simulation-comparison {
     padding: var(--space-3);
+  }
+  .route-simulation-comparison__transport button,
+  .route-simulation-comparison__renderer-modes button,
+  .route-simulation-comparison__rates button {
+    min-height: 44px;
+  }
+  .route-simulation-comparison__seek input[type="range"] {
+    min-height: 44px;
+    margin: 0;
   }
   .route-simulation-viewport__stats {
     grid-template-columns: 1fr;

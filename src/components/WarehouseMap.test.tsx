@@ -27,6 +27,7 @@ function computeRoutes(targetIds: string[]) {
 }
 
 interface SetupOverrides {
+  language?: "ko" | "en";
   manualStopIds?: NodeId[];
   completedIds?: Set<NodeId>;
   searchMatchIds?: Set<NodeId>;
@@ -39,7 +40,7 @@ function setup(targetIds: string[], selected: Set<string>, overrides: SetupOverr
   const { visitIds, pathMatrix, worker, recommended } = computeRoutes(targetIds);
 
   return render(
-    <LanguageProvider initialLanguage="en">
+    <LanguageProvider initialLanguage={overrides.language ?? "en"}>
       <WarehouseMap
         graph={sampleWarehouse}
         selected={selected}
@@ -59,6 +60,19 @@ function setup(targetIds: string[], selected: Set<string>, overrides: SetupOverr
 }
 
 describe("WarehouseMap", () => {
+  test("localizes the SVG title and both legend accessible names", () => {
+    const english = setup(["loc-A", "loc-B"], new Set(["loc-A", "loc-B"]));
+    expect(english.getByRole("img", { name: /Warehouse floor plan showing/ })).toBeTruthy();
+    expect(english.getByRole("list", { name: "Map legend" })).toBeTruthy();
+    expect(english.getByRole("list", { name: "Route line legend" })).toBeTruthy();
+    english.unmount();
+
+    const korean = setup(["loc-A", "loc-B"], new Set(["loc-A", "loc-B"]), { language: "ko" });
+    expect(korean.getByRole("img", { name: /창고 평면도/ })).toBeTruthy();
+    expect(korean.getByRole("list", { name: "지도 범례" })).toBeTruthy();
+    expect(korean.getByRole("list", { name: "경로 선 범례" })).toBeTruthy();
+  });
+
   test("renders an optional simulation marker at the supplied display coordinate", () => {
     const { container } = setup([], new Set(), { simulationMarker: { x: 12.5, y: 34.75 } });
     const marker = container.querySelector('[data-testid="simulation-marker"]');

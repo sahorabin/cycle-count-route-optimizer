@@ -5,6 +5,7 @@ import type { Language } from "../i18n/translations";
 import type { RouteVisibility } from "./WarehouseMap";
 import type { WorkflowStep } from "./WorkflowSteps";
 import { useTranslation } from "../i18n/useTranslation";
+import type { Ref } from "react";
 
 interface ComparisonHeroProps {
   step: WorkflowStep;
@@ -16,6 +17,7 @@ interface ComparisonHeroProps {
   comparisonRequested: boolean;
   routeVisibility: RouteVisibility;
   onRouteVisibilityChange: (visibility: RouteVisibility) => void;
+  resultRef?: Ref<HTMLElement>;
 }
 
 function formatNumber(value: number): string {
@@ -51,6 +53,7 @@ export function ComparisonHero({
   comparisonRequested,
   routeVisibility,
   onRouteVisibilityChange,
+  resultRef,
 }: ComparisonHeroProps) {
   const { t, language } = useTranslation();
 
@@ -77,7 +80,12 @@ export function ComparisonHero({
   const canShowComparison = comparisonRequested && manualStopCount >= 2 && manual && recommended;
 
   return (
-    <section className="comparison-hero" aria-label={t("comparison.title")}>
+    <section
+      ref={resultRef}
+      className="comparison-hero"
+      aria-label={t("comparison.title")}
+      tabIndex={canShowComparison ? -1 : undefined}
+    >
       <div className="comparison-hero__header">
         <h2>{t("comparison.title")}</h2>
         <label className="comparison-hero__speed">
@@ -114,7 +122,7 @@ export function ComparisonHero({
               <p className="comparison-hero__summary">{summary}</p>
 
               <fieldset className="comparison-hero__visibility">
-                <legend className="visually-hidden">Route visibility</legend>
+                <legend className="visually-hidden">{t("comparison.routeVisibility")}</legend>
                 {(
                   [
                     { value: "worker", label: t("comparison.manual") },
@@ -155,6 +163,7 @@ export function ComparisonHero({
                   </p>
                 </div>
               </div>
+              <p className="comparison-hero__replay-cue">{t("comparison.replayCue")}</p>
             </>
           );
         })()

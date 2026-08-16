@@ -23,6 +23,7 @@ describe("LanguageSwitcher", () => {
       </LanguageProvider>,
     );
     expect((screen.getByRole("radio", { name: "한국어" }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByRole("group", { name: "언어" })).toBeTruthy();
     expect(screen.getByTestId("probe").textContent).toBe("순환 재고 조사 경로 최적화");
   });
 
@@ -34,5 +35,6 @@ describe("LanguageSwitcher", () => {
     );
     fireEvent.click(screen.getByRole("radio", { name: "English" }));
     expect(screen.getByTestId("probe").textContent).toBe("Cycle Count Route Optimizer");
+    expect(screen.getByRole("group", { name: "Language" })).toBeTruthy();
   });
 });

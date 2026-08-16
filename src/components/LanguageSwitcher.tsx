@@ -21,7 +21,7 @@ export function LanguageSwitcher() {
 
   return (
     <fieldset className="language-switcher">
-      <legend className="visually-hidden">Language</legend>
+      <legend className="visually-hidden">{t("language.selectorLabel")}</legend>
       {radio("ko", t("language.korean"))}
       {radio("en", t("language.english"))}
     </fieldset>

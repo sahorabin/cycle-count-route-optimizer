@@ -35,7 +35,14 @@ vi.mock("@react-three/fiber", () => ({
   useThree: vi.fn(),
 }));
 
-import { Warehouse3DViewport } from "./Warehouse3DViewport";
+import { createWarehouse3DTransform, projectNodeToWarehouse3D } from "../ui/warehouse3dProjection";
+import {
+  Warehouse3DViewport,
+} from "./Warehouse3DViewport";
+import {
+  buildWarehouse3DRouteVisualSegments,
+  WAREHOUSE_3D_VISUALS,
+} from "../ui/warehouse3dVisuals";
 
 const timeline: RouteTimeline = {
   order: [sampleWarehouse.start.id],
@@ -45,6 +52,26 @@ const timeline: RouteTimeline = {
   totalDurationSeconds: 0,
 };
 
+const routedTimeline: RouteTimeline = {
+  order: ["office", "loc-D"],
+  walkingSpeedMetersPerMinute: 60,
+  totalDistance: 30,
+  totalDurationSeconds: 30,
+  legs: [{
+    from: "office",
+    to: "loc-D",
+    distance: 30,
+    startTimeSeconds: 0,
+    durationSeconds: 30,
+    endTimeSeconds: 30,
+    segments: [
+      { from: "office", to: "F1", distance: 8, startTimeSeconds: 0, durationSeconds: 8, endTimeSeconds: 8 },
+      { from: "F1", to: "F2", distance: 20, startTimeSeconds: 8, durationSeconds: 20, endTimeSeconds: 28 },
+      { from: "F2", to: "loc-D", distance: 2, startTimeSeconds: 28, durationSeconds: 2, endTimeSeconds: 30 },
+    ],
+  }],
+};
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -52,6 +79,51 @@ afterEach(() => {
 });
 
 describe("Warehouse3DViewport", () => {
+  test("builds one world-space visual cylinder descriptor per existing route segment in order", () => {
+    const transform = createWarehouse3DTransform(sampleWarehouse);
+    const before = JSON.stringify(routedTimeline);
+    const segments = buildWarehouse3DRouteVisualSegments(
+      sampleWarehouse,
+      routedTimeline,
+      transform,
+    );
+
+    expect(segments.map(({ fromId, toId }) => [fromId, toId])).toEqual([
+      ["office", "F1"],
+      ["F1", "F2"],
+      ["F2", "loc-D"],
+    ]);
+    expect(segments).toHaveLength(routedTimeline.legs[0].segments.length);
+    expect(segments[0].from).toEqual({
+      ...projectNodeToWarehouse3D(sampleWarehouse, "office", transform),
+      y: WAREHOUSE_3D_VISUALS.route.y,
+    });
+    expect(segments.at(-1)?.to).toEqual({
+      ...projectNodeToWarehouse3D(sampleWarehouse, "loc-D", transform),
+      y: WAREHOUSE_3D_VISUALS.route.y,
+    });
+    expect(segments.every((segment) => segment.visualLength > 0)).toBe(true);
+    expect(JSON.stringify(routedTimeline)).toBe(before);
+    expect(routedTimeline.totalDistance).toBe(30);
+  });
+
+  test("uses shared rendering constants that prioritize route, worker, and destinations over racks", () => {
+    expect(WAREHOUSE_3D_VISUALS.route.radius).toBeGreaterThan(0);
+    expect(WAREHOUSE_3D_VISUALS.route.y).toBeGreaterThan(0);
+    expect(WAREHOUSE_3D_VISUALS.route.depthTest).toBe(false);
+    expect(WAREHOUSE_3D_VISUALS.route.depthWrite).toBe(false);
+    expect(WAREHOUSE_3D_VISUALS.worker.ringOuterRadius).toBeGreaterThan(
+      WAREHOUSE_3D_VISUALS.worker.bodyBottomRadius,
+    );
+    expect(WAREHOUSE_3D_VISUALS.worker.ringOuterRadius).toBeGreaterThan(
+      WAREHOUSE_3D_VISUALS.destination.ringOuterRadius,
+    );
+    expect(WAREHOUSE_3D_VISUALS.destination.beaconY).toBeGreaterThan(
+      WAREHOUSE_3D_VISUALS.rack.height,
+    );
+    expect(WAREHOUSE_3D_VISUALS.rack.color).toBe("#96a3ad");
+  });
+
   test("uses an accessible fixed orthographic demand Canvas with a capped DPR", () => {
     vi.stubGlobal("WebGLRenderingContext", class WebGLRenderingContext {});
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({

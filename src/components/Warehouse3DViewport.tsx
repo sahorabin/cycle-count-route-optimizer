@@ -1,6 +1,6 @@
 import { Canvas, useThree } from "@react-three/fiber";
 import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
-import { OrthographicCamera } from "three";
+import { OrthographicCamera, Quaternion, Vector3 } from "three";
 import type { RouteTimeline, WarehouseGraph } from "../domain/types";
 import type { SimulationSnapshot } from "../simulation/types";
 import { computeRackRects } from "../ui/rackLayout";
@@ -11,6 +11,11 @@ import {
   projectSimulationMarkerTo3D,
   type Warehouse3DTransform,
 } from "../ui/warehouse3dProjection";
+import {
+  buildWarehouse3DRouteVisualSegments,
+  WAREHOUSE_3D_VISUALS,
+  type Warehouse3DRouteVisualSegment,
+} from "../ui/warehouse3dVisuals";
 import type { ReplayRouteMode } from "./RouteSimulationReplay";
 
 interface Warehouse3DViewportProps {
@@ -86,9 +91,16 @@ function WarehouseRacks({ graph, transform }: {
   );
 
   return racks.map((rack, index) => (
-    <mesh key={index} position={[rack.center.x, 0.62, rack.center.z]}>
-      <boxGeometry args={[rack.width, 1.24, rack.depth]} />
-      <meshStandardMaterial color="#526577" roughness={0.8} />
+    <mesh
+      key={index}
+      position={[rack.center.x, WAREHOUSE_3D_VISUALS.rack.height / 2, rack.center.z]}
+    >
+      <boxGeometry args={[rack.width, WAREHOUSE_3D_VISUALS.rack.height, rack.depth]} />
+      <meshStandardMaterial
+        color={WAREHOUSE_3D_VISUALS.rack.color}
+        roughness={WAREHOUSE_3D_VISUALS.rack.roughness}
+        metalness={0}
+      />
     </mesh>
   ));
 }
@@ -109,10 +121,34 @@ function WarehouseLocations({ graph, timeline, transform, color }: {
     [graph, routeIds, transform],
   );
 
-  return locations.map(({ id, point, selected }) => (
-    <mesh key={id} position={[point.x, selected ? 0.22 : 0.11, point.z]}>
-      <sphereGeometry args={[selected ? 0.18 : 0.09, 8, 6]} />
-      <meshStandardMaterial color={selected ? color : "#a8b5bf"} roughness={0.75} />
+  return locations.map(({ id, point, selected }) => selected ? (
+    <group key={id} position={[point.x, 0, point.z]}>
+      <mesh position={[0, 0.045, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[
+          WAREHOUSE_3D_VISUALS.destination.ringInnerRadius,
+          WAREHOUSE_3D_VISUALS.destination.ringOuterRadius,
+          20,
+        ]} />
+        <meshBasicMaterial color={color} />
+      </mesh>
+      <mesh position={[0, 0.64, 0]}>
+        <cylinderGeometry args={[
+          WAREHOUSE_3D_VISUALS.destination.stemRadius,
+          WAREHOUSE_3D_VISUALS.destination.stemRadius,
+          WAREHOUSE_3D_VISUALS.destination.stemHeight,
+          8,
+        ]} />
+        <meshBasicMaterial color={color} />
+      </mesh>
+      <mesh position={[0, WAREHOUSE_3D_VISUALS.destination.beaconY, 0]}>
+        <octahedronGeometry args={[WAREHOUSE_3D_VISUALS.destination.beaconRadius, 0]} />
+        <meshBasicMaterial color={color} />
+      </mesh>
+    </group>
+  ) : (
+    <mesh key={id} position={[point.x, 0.08, point.z]}>
+      <sphereGeometry args={[0.065, 8, 6]} />
+      <meshStandardMaterial color="#b7c1c9" roughness={0.85} />
     </mesh>
   ));
 }
@@ -133,31 +169,96 @@ function OfficeMarker({ graph, transform }: {
   );
 }
 
+function RouteTrailSegment({ segment, color }: {
+  segment: Warehouse3DRouteVisualSegment;
+  color: string;
+}) {
+  const quaternion = useMemo(() => {
+    if (segment.visualLength === 0) return new Quaternion();
+    const direction = new Vector3(
+      segment.to.x - segment.from.x,
+      segment.to.y - segment.from.y,
+      segment.to.z - segment.from.z,
+    ).normalize();
+    return new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), direction);
+  }, [segment]);
+
+  if (segment.visualLength === 0) {
+    return (
+      <mesh position={[segment.from.x, segment.from.y, segment.from.z]} renderOrder={2}>
+        <sphereGeometry args={[WAREHOUSE_3D_VISUALS.route.radius, 8, 6]} />
+        <meshBasicMaterial
+          color={color}
+          depthTest={WAREHOUSE_3D_VISUALS.route.depthTest}
+          depthWrite={WAREHOUSE_3D_VISUALS.route.depthWrite}
+        />
+      </mesh>
+    );
+  }
+
+  return (
+    <group>
+      <mesh
+        position={[segment.midpoint.x, segment.midpoint.y, segment.midpoint.z]}
+        quaternion={quaternion}
+        renderOrder={2}
+      >
+        <cylinderGeometry args={[
+          WAREHOUSE_3D_VISUALS.route.radius,
+          WAREHOUSE_3D_VISUALS.route.radius,
+          segment.visualLength,
+          WAREHOUSE_3D_VISUALS.route.radialSegments,
+        ]} />
+        <meshBasicMaterial
+          color={color}
+          depthTest={WAREHOUSE_3D_VISUALS.route.depthTest}
+          depthWrite={WAREHOUSE_3D_VISUALS.route.depthWrite}
+        />
+      </mesh>
+      <mesh position={[segment.from.x, segment.from.y, segment.from.z]} renderOrder={2}>
+        <sphereGeometry args={[WAREHOUSE_3D_VISUALS.route.radius, 8, 6]} />
+        <meshBasicMaterial
+          color={color}
+          depthTest={WAREHOUSE_3D_VISUALS.route.depthTest}
+          depthWrite={WAREHOUSE_3D_VISUALS.route.depthWrite}
+        />
+      </mesh>
+    </group>
+  );
+}
+
 function RouteTrail({ graph, timeline, transform, color }: {
   graph: WarehouseGraph;
   timeline: RouteTimeline;
   transform: Warehouse3DTransform;
   color: string;
 }) {
-  const positions = useMemo(() => {
-    const values: number[] = [];
-    for (const leg of timeline.legs) {
-      for (const segment of leg.segments) {
-        const from = projectNodeToWarehouse3D(graph, segment.from, transform);
-        const to = projectNodeToWarehouse3D(graph, segment.to, transform);
-        values.push(from.x, 0.09, from.z, to.x, 0.09, to.z);
-      }
-    }
-    return new Float32Array(values);
-  }, [graph, timeline, transform]);
+  const segments = useMemo(
+    () => buildWarehouse3DRouteVisualSegments(graph, timeline, transform),
+    [graph, timeline, transform],
+  );
+  const finalPoint = segments.at(-1)?.to;
 
   return (
-    <lineSegments>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-      </bufferGeometry>
-      <lineBasicMaterial color={color} linewidth={2} />
-    </lineSegments>
+    <group>
+      {segments.map((segment, index) => (
+        <RouteTrailSegment
+          key={`${segment.fromId}-${segment.toId}-${index}`}
+          segment={segment}
+          color={color}
+        />
+      ))}
+      {finalPoint ? (
+        <mesh position={[finalPoint.x, finalPoint.y, finalPoint.z]} renderOrder={2}>
+          <sphereGeometry args={[WAREHOUSE_3D_VISUALS.route.radius, 8, 6]} />
+          <meshBasicMaterial
+            color={color}
+            depthTest={WAREHOUSE_3D_VISUALS.route.depthTest}
+            depthWrite={WAREHOUSE_3D_VISUALS.route.depthWrite}
+          />
+        </mesh>
+      ) : null}
+    </group>
   );
 }
 
@@ -174,14 +275,39 @@ function WorkerMarker({ graph, timeline, snapshot, transform, color }: {
   );
 
   return (
-    <group position={[marker.x, 0.08, marker.z]}>
-      <mesh position={[0, 0.3, 0]}>
-        <cylinderGeometry args={[0.16, 0.2, 0.5, 10]} />
-        <meshStandardMaterial color={color} roughness={0.55} />
+    <group position={[marker.x, 0, marker.z]}>
+      <mesh
+        position={[0, 0.05, 0]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        renderOrder={3}
+      >
+        <circleGeometry args={[WAREHOUSE_3D_VISUALS.worker.discRadius, 24]} />
+        <meshBasicMaterial color="#ffffff" depthTest={false} depthWrite={false} />
       </mesh>
-      <mesh position={[0, 0.67, 0]}>
-        <sphereGeometry args={[0.16, 10, 8]} />
-        <meshStandardMaterial color="#f4c7a1" roughness={0.7} />
+      <mesh
+        position={[0, 0.055, 0]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        renderOrder={4}
+      >
+        <ringGeometry args={[
+          WAREHOUSE_3D_VISUALS.worker.ringInnerRadius,
+          WAREHOUSE_3D_VISUALS.worker.ringOuterRadius,
+          24,
+        ]} />
+        <meshBasicMaterial color={color} depthTest={false} depthWrite={false} />
+      </mesh>
+      <mesh position={[0, WAREHOUSE_3D_VISUALS.worker.bodyY, 0]} renderOrder={5}>
+        <cylinderGeometry args={[
+          WAREHOUSE_3D_VISUALS.worker.bodyTopRadius,
+          WAREHOUSE_3D_VISUALS.worker.bodyBottomRadius,
+          WAREHOUSE_3D_VISUALS.worker.bodyHeight,
+          12,
+        ]} />
+        <meshBasicMaterial color={color} depthTest={false} depthWrite={false} />
+      </mesh>
+      <mesh position={[0, WAREHOUSE_3D_VISUALS.worker.headY, 0]} renderOrder={5}>
+        <sphereGeometry args={[WAREHOUSE_3D_VISUALS.worker.headRadius, 12, 10]} />
+        <meshBasicMaterial color="#f4c7a1" depthTest={false} depthWrite={false} />
       </mesh>
     </group>
   );

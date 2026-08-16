@@ -126,9 +126,30 @@ export function RouteSimulationComparison({
               type="range"
               min={0}
               max={sharedDurationSeconds}
-              step="any"
+              step={1}
               value={playback.clock.timeSeconds}
+              aria-valuetext={t("replay.seekValue", {
+                current: formatReplayTime(playback.clock.timeSeconds),
+                total: formatReplayTime(sharedDurationSeconds),
+              })}
               onChange={(event) => playback.seek(Number(event.target.value))}
+              onKeyDown={(event) => {
+                let nextTime: number | null = null;
+                if (event.key === "ArrowRight") {
+                  nextTime = playback.clock.timeSeconds + 1;
+                } else if (event.key === "ArrowLeft") {
+                  nextTime = playback.clock.timeSeconds - 1;
+                } else if (event.key === "Home") {
+                  nextTime = 0;
+                } else if (event.key === "End") {
+                  nextTime = sharedDurationSeconds;
+                }
+
+                if (nextTime !== null) {
+                  event.preventDefault();
+                  playback.seek(nextTime);
+                }
+              }}
             />
           </label>
 

@@ -5,11 +5,14 @@ import type { ComponentProps } from "react";
 import { ComparisonHero } from "./ComparisonHero";
 import { LanguageProvider } from "../i18n/LanguageContext";
 
-function setup(props: Partial<ComponentProps<typeof ComparisonHero>> = {}) {
+function setup(
+  props: Partial<ComponentProps<typeof ComparisonHero>> = {},
+  language: "ko" | "en" = "en",
+) {
   const onWalkingSpeedChange = vi.fn();
   const onRouteVisibilityChange = vi.fn();
-  const { container } = render(
-    <LanguageProvider initialLanguage="en">
+  const rendered = render(
+    <LanguageProvider initialLanguage={language}>
       <ComparisonHero
         step={3}
         manual={{ order: ["office", "a", "b"], totalDistance: 132 }}
@@ -24,7 +27,7 @@ function setup(props: Partial<ComponentProps<typeof ComparisonHero>> = {}) {
       />
     </LanguageProvider>,
   );
-  return { onWalkingSpeedChange, onRouteVisibilityChange, container };
+  return { onWalkingSpeedChange, onRouteVisibilityChange, ...rendered };
 }
 
 describe("ComparisonHero", () => {
@@ -110,6 +113,21 @@ describe("ComparisonHero", () => {
     expect(bothRadio.checked).toBe(false);
     fireEvent.click(bothRadio);
     expect(onRouteVisibilityChange).toHaveBeenCalledWith("both");
+  });
+
+  test("localizes the route-visibility group and links the result to replay", () => {
+    const english = setup();
+    expect(screen.getByRole("group", { name: "Route visibility" })).toBeTruthy();
+    expect(
+      screen.getByText("Next: See how both routes progress on the shared-clock simulation below."),
+    ).toBeTruthy();
+    english.unmount();
+
+    setup({}, "ko");
+    expect(screen.getByRole("group", { name: "경로 표시" })).toBeTruthy();
+    expect(
+      screen.getByText("다음: 아래 공유 시계 시뮬레이션에서 두 경로의 진행 차이를 확인하세요."),
+    ).toBeTruthy();
   });
 
   test("never labels the recommended route as mathematically optimal", () => {

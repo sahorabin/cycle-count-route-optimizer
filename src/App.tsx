@@ -128,6 +128,8 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
     sanitizeManualRouteStopIds(persisted.manualRouteStopIds, new Set(sanitizeKnownIds(persisted.selectedIds))),
   );
   const routeEditorRef = useRef<HTMLDivElement>(null);
+  const comparisonResultRef = useRef<HTMLElement>(null);
+  const [resultFocusRequest, setResultFocusRequest] = useState(0);
 
   // Any edit to the manual route invalidates a previously generated
   // comparison -- the worker must explicitly re-generate it, so the
@@ -227,6 +229,16 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
 
   const currentStep = computeWorkflowStep(selected.size, manualRoute.stopIds.length);
   const simulationInputKey = useMemo(() => [...selected].sort().join("|"), [selected]);
+  const comparisonResultReady = comparisonRequested && replayInputs !== null;
+
+  // Move keyboard and visual attention to the newly generated result. A
+  // request counter makes repeat generation deterministic without relying on
+  // a timeout, while restored persisted results remain passive on mount.
+  useEffect(() => {
+    if (!comparisonResultReady || resultFocusRequest === 0) return;
+    comparisonResultRef.current?.focus({ preventScroll: true });
+    comparisonResultRef.current?.scrollIntoView?.({ block: "start" });
+  }, [comparisonResultReady, resultFocusRequest]);
 
   function toggleSelected(id: NodeId) {
     setSelected((prev) => {
@@ -260,10 +272,20 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
     });
   }
 
+  function generateComparison() {
+    if (!manualComputation || !recommendedComputation || manualRoute.stopIds.length < 2) return;
+    setComparisonRequested(true);
+    setResultFocusRequest((request) => request + 1);
+  }
+
   return (
     <div className="app">
       <header className="app__header">
-        <h1>{t("app.title")}</h1>
+        <div className="app__identity">
+          <h1>{t("app.title")}</h1>
+          <p className="app__subtitle">{t("app.proposition")}</p>
+          <p className="app__demo-note">{t("app.demoDisclosure")}</p>
+        </div>
         <LanguageSwitcher />
       </header>
 
@@ -279,6 +301,7 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
         comparisonRequested={comparisonRequested}
         routeVisibility={routeVisibility}
         onRouteVisibilityChange={setRouteVisibility}
+        resultRef={comparisonResultRef}
       />
 
       <ProgressPanel
@@ -329,7 +352,7 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
             onMoveDown={manualRoute.moveDown}
             onRemove={manualRoute.removeStop}
             onClear={manualRoute.clear}
-            onGenerate={() => setComparisonRequested(true)}
+            onGenerate={generateComparison}
           />
         </div>
 

@@ -1,6 +1,8 @@
 export const translations = {
   ko: {
     "app.title": "순환 재고 조사 경로 최적화",
+    "app.proposition": "동일한 창고 조건에서 작업자 계획 경로와 시스템 추천 경로를 비교해 이동 거리와 작업 시간 절감 효과를 확인합니다.",
+    "app.demoDisclosure": "데모 창고 · 합성 운영 데이터",
 
     "workflow.title": "작업 단계",
     "workflow.step1": "위치 선택",
@@ -50,6 +52,8 @@ export const translations = {
     "comparison.summaryTemplate": "{distance} {unit}, {duration} 절약 — 도보 거리 {pct}% 감소",
     "comparison.durationFormat": "{m}분 {s}초",
     "comparison.toggleBoth": "모두 보기",
+    "comparison.routeVisibility": "경로 표시",
+    "comparison.replayCue": "다음: 아래 공유 시계 시뮬레이션에서 두 경로의 진행 차이를 확인하세요.",
 
     "replay.eyebrow": "공유 시계 시뮬레이션",
     "replay.title": "작업자 경로와 추천 경로 비교 재생",
@@ -70,6 +74,7 @@ export const translations = {
     "replay.pause": "일시정지",
     "replay.reset": "초기화",
     "replay.seek": "재생 위치",
+    "replay.seekValue": "전체 {total} 중 {current}",
     "replay.playbackRate": "재생 속도",
     "replay.renderer": "창고 보기",
     "replay.renderer3d": "3D",
@@ -91,12 +96,16 @@ export const translations = {
 
     "language.korean": "한국어",
     "language.english": "English",
+    "language.selectorLabel": "언어",
 
     "units.meters": "m",
     "units.minutes": "분",
     "units.seconds": "초",
 
     "map.legend.office": "사무실 / 출발점",
+    "map.accessibleTitle": "사무실, 선반, 통로, 재고 조사 위치와 작업자 및 추천 경로가 표시된 창고 평면도",
+    "map.legendLabel": "지도 범례",
+    "map.routeLegendLabel": "경로 선 범례",
     "map.legend.pending": "조사 가능 (미선택)",
     "map.legend.selected": "오늘 선택됨",
     "map.legend.completed": "완료 처리됨",
@@ -110,6 +119,8 @@ export const translations = {
   },
   en: {
     "app.title": "Cycle Count Route Optimizer",
+    "app.proposition": "Compare a worker-planned cycle count route with the system recommendation under identical warehouse conditions to see the potential reduction in walking distance and work time.",
+    "app.demoDisclosure": "Demo warehouse · Synthetic operational data",
 
     "workflow.title": "Workflow steps",
     "workflow.step1": "Select locations",
@@ -159,6 +170,8 @@ export const translations = {
     "comparison.summaryTemplate": "{distance} {unit} and {duration} saved — {pct}% less walking",
     "comparison.durationFormat": "{m} min {s} sec",
     "comparison.toggleBoth": "Both",
+    "comparison.routeVisibility": "Route visibility",
+    "comparison.replayCue": "Next: See how both routes progress on the shared-clock simulation below.",
 
     "replay.eyebrow": "Shared-clock simulation",
     "replay.title": "Worker vs recommended route replay",
@@ -179,6 +192,7 @@ export const translations = {
     "replay.pause": "Pause",
     "replay.reset": "Reset",
     "replay.seek": "Replay position",
+    "replay.seekValue": "{current} of {total}",
     "replay.playbackRate": "Playback speed",
     "replay.renderer": "Warehouse view",
     "replay.renderer3d": "3D",
@@ -200,12 +214,16 @@ export const translations = {
 
     "language.korean": "한국어",
     "language.english": "English",
+    "language.selectorLabel": "Language",
 
     "units.meters": "m",
     "units.minutes": "min",
     "units.seconds": "sec",
 
     "map.legend.office": "Office / start",
+    "map.accessibleTitle": "Warehouse floor plan showing the office, racks, aisles, cycle-count locations, and worker and recommended routes",
+    "map.legendLabel": "Map legend",
+    "map.routeLegendLabel": "Route line legend",
     "map.legend.pending": "Available (unselected)",
     "map.legend.selected": "Selected for today",
     "map.legend.completed": "Marked complete",

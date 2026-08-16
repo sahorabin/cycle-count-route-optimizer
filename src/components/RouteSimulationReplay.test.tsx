@@ -151,6 +151,9 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getAllByRole("button", { name: "Play" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Reset" })).toHaveLength(1);
     expect(seek.value).toBe("0");
+    expect(seek.min).toBe("0");
+    expect(seek.step).toBe("1");
+    expect(seek.getAttribute("aria-valuetext")).toMatch(/^0:00 of /);
     expect(Number(seek.max)).toBe(Math.max(
       workerTimeline.totalDurationSeconds,
       recommendedTimeline.totalDurationSeconds,
@@ -229,6 +232,32 @@ describe("RouteSimulationComparison", () => {
     const backward = markerTransforms();
     expect(backward[0]).not.toBe(forward[0]);
     expect(backward[1]).not.toBe(forward[1]);
+  });
+
+  test("exposes native one-second Arrow and Home/End range semantics with localized value text", () => {
+    const { workerTimeline, recommendedTimeline, unmount } = setupComparison();
+    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+    const duration = Math.max(
+      workerTimeline.totalDurationSeconds,
+      recommendedTimeline.totalDurationSeconds,
+    );
+    expect(seek.min).toBe("0");
+    expect(seek.max).toBe(String(duration));
+    expect(seek.step).toBe("1");
+    fireEvent.keyDown(seek, { key: "ArrowRight" });
+    expect(seek.value).toBe("1");
+    expect(seek.getAttribute("aria-valuetext")).toMatch(/^0:01 of /);
+    fireEvent.keyDown(seek, { key: "ArrowLeft" });
+    expect(seek.value).toBe("0");
+    fireEvent.keyDown(seek, { key: "End" });
+    expect(Number(seek.value)).toBe(duration);
+    fireEvent.keyDown(seek, { key: "Home" });
+    expect(seek.value).toBe("0");
+    unmount();
+
+    setupComparison("ko");
+    const koreanSeek = screen.getByLabelText("재생 위치") as HTMLInputElement;
+    expect(koreanSeek.getAttribute("aria-valuetext")).toMatch(/^전체 .* 중 0:00$/);
   });
 
   test("shorter recommended route completes and keeps its final marker while worker continues", () => {
