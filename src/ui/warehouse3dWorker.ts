@@ -1,6 +1,8 @@
 import type { RouteTimeline, WarehouseGraph } from "../domain/types";
 import type { SimulationSnapshot } from "../simulation/types";
 import type { WarehouseCountingGesture } from "./warehouse3dServiceVisual";
+import type { NodeId } from "../domain/types";
+import type { Point } from "./svgPoints";
 import {
   projectNodeToWarehouse3D,
   projectSimulationMarkerTo3D,
@@ -53,11 +55,17 @@ export interface WarehouseWorkerPose {
   readonly facingSource: "current-segment" | "last-segment" | "default";
 }
 
+/**
+ * Muted workwear rather than saturated primaries. The route identity colour is
+ * carried only by the hi-vis vest and hard hat -- the way a real operator is
+ * identifiable -- so the figure reads as PPE instead of a painted game token.
+ */
 export const WAREHOUSE_WORKER_COLORS = {
-  skin: "#e7b98f",
-  workwear: "#334155",
-  safety: "#f2c14e",
-  equipment: "#1f2937",
+  skin: "#c2a184",
+  uniform: "#46505f",
+  workwear: "#39414d",
+  safety: "#c8a13a",
+  equipment: "#262b33",
 } as const;
 
 const DEFAULT_FACING_YAW = 0;
@@ -71,6 +79,38 @@ function basePart(
   rotation: readonly [number, number, number] = [0, 0, 0],
 ): WarehouseWorkerPartBase {
   return { id, role, color, position, rotation };
+}
+
+/**
+ * The operator is rendered at an aisle standing position rather than at the bin
+ * itself (see OPERATOR_AISLE_STANDOFF), so the body can obey scene depth without
+ * being swallowed by racking. Nothing draws the body through geometry.
+ */
+export const WAREHOUSE_WORKER_DEPTH_POLICY = {
+  /** The body is ordinary scene geometry: racking in front of it occludes it. */
+  body: { depthTest: true, depthWrite: true, renderOrder: 0 },
+  /** Only a small floor ring and locator pip stay depth-independent. */
+  locator: { depthTest: false, depthWrite: false, renderOrder: 4, pipRadius: 0.05 },
+} as const;
+
+/**
+ * Renderer-only visual scale. The operator reads as human-sized in close
+ * inspection framing and stops dominating wide contextual views, without any
+ * change to the simulated position the figure stands on.
+ */
+export const WAREHOUSE_WORKER_SCALE = {
+  minimum: 0.55,
+  maximum: 1,
+  minimumZoomRatio: 1,
+  maximumZoomRatio: 1.65,
+} as const;
+
+export function getWarehouseWorkerFigureScale(zoomRatio: number): number {
+  if (!Number.isFinite(zoomRatio)) return WAREHOUSE_WORKER_SCALE.maximum;
+  const span = WAREHOUSE_WORKER_SCALE.maximumZoomRatio - WAREHOUSE_WORKER_SCALE.minimumZoomRatio;
+  const blend = Math.min(1, Math.max(0, (zoomRatio - WAREHOUSE_WORKER_SCALE.minimumZoomRatio) / span));
+  return WAREHOUSE_WORKER_SCALE.minimum
+    + (WAREHOUSE_WORKER_SCALE.maximum - WAREHOUSE_WORKER_SCALE.minimum) * blend;
 }
 
 /** A deterministic visual yaw for a model whose forward axis is world +Z. */
@@ -95,11 +135,12 @@ export function createWarehouseWorkerPose(
   timeline: RouteTimeline,
   snapshot: SimulationSnapshot,
   transform: Warehouse3DTransform,
+  coordinates?: ReadonlyMap<NodeId, Point>,
 ): WarehouseWorkerPose {
-  const position = projectSimulationMarkerTo3D(graph, timeline, snapshot, transform);
+  const position = projectSimulationMarkerTo3D(graph, timeline, snapshot, transform, coordinates);
   if (snapshot.current?.kind === "travel") {
-    const from = projectNodeToWarehouse3D(graph, snapshot.current.from, transform);
-    const to = projectNodeToWarehouse3D(graph, snapshot.current.to, transform);
+    const from = projectNodeToWarehouse3D(graph, snapshot.current.from, transform, coordinates);
+    const to = projectNodeToWarehouse3D(graph, snapshot.current.to, transform, coordinates);
     return {
       position,
       yawRadians: getWarehouseWorkerFacingYaw(from, to),
@@ -112,8 +153,8 @@ export function createWarehouseWorkerPose(
     : timeline.legs.at(-1);
   const finalSegment = facingLeg?.segments.at(-1);
   if (finalSegment) {
-    const from = projectNodeToWarehouse3D(graph, finalSegment.from, transform);
-    const to = projectNodeToWarehouse3D(graph, finalSegment.to, transform);
+    const from = projectNodeToWarehouse3D(graph, finalSegment.from, transform, coordinates);
+    const to = projectNodeToWarehouse3D(graph, finalSegment.to, transform, coordinates);
     return {
       position,
       yawRadians: getWarehouseWorkerFacingYaw(from, to),
@@ -125,10 +166,13 @@ export function createWarehouseWorkerPose(
 }
 
 /** Shoulder pivot of the arm primitives, so a raised arm swings from the shoulder. */
-const SHOULDER_Y = 1.21;
-const HAND_REACH = 0.52;
-const SCANNER_REACH = 0.62;
-const ARM_CENTER_REACH = 0.25;
+const SHOULDER_Y = WAREHOUSE_3D_VISUALS.worker.shoulderY;
+const HAND_REACH = 0.55;
+const SCANNER_REACH = 0.6;
+const ARM_CENTER_REACH = 0.26;
+const ARM_X = 0.235;
+const HAND_X = 0.255;
+const SCANNER_X = 0.265;
 
 /**
  * Parts that follow the upper-body twist during counting. Legs, boots, and the
@@ -181,29 +225,29 @@ function countingPartTransform(
   gesture: WarehouseCountingGesture,
 ): PartTransform {
   const { armLift, supportSwing, headDip } = gesture;
-  const headOffset: readonly [number, number, number] = [0, -0.05 * headDip, 0.08 * headDip];
+  const headOffset: readonly [number, number, number] = [0, -0.035 * headDip, 0.055 * headDip];
 
   switch (part.id) {
     case "right-arm":
       return {
-        position: swungFromShoulder(0.33, ARM_CENTER_REACH, armLift),
-        rotation: [-armLift, 0, 0.16],
+        position: swungFromShoulder(ARM_X, ARM_CENTER_REACH, armLift),
+        rotation: [-armLift, 0, 0.12],
       };
     case "right-hand":
-      return { position: swungFromShoulder(0.37, HAND_REACH, armLift), rotation: part.rotation };
+      return { position: swungFromShoulder(HAND_X, HAND_REACH, armLift), rotation: part.rotation };
     case "scanner":
       return {
-        position: swungFromShoulder(0.4, SCANNER_REACH, armLift, 0.06),
+        position: swungFromShoulder(SCANNER_X, SCANNER_REACH, armLift, 0.05),
         rotation: [-(armLift + 0.35), 0, 0.05],
       };
     case "left-arm":
       return {
-        position: swungFromShoulder(-0.33, ARM_CENTER_REACH, supportSwing),
-        rotation: [-supportSwing, 0, -0.16],
+        position: swungFromShoulder(-ARM_X, ARM_CENTER_REACH, supportSwing),
+        rotation: [-supportSwing, 0, -0.12],
       };
     case "left-hand":
       return {
-        position: swungFromShoulder(-0.37, HAND_REACH, supportSwing),
+        position: swungFromShoulder(-HAND_X, HAND_REACH, supportSwing),
         rotation: part.rotation,
       };
     case "head":
@@ -245,90 +289,136 @@ function applyCountingGesture(
 export function createWarehouseWorkerVisual(
   identityColor: string,
   gesture: WarehouseCountingGesture | null = null,
+  figureScale: number = WAREHOUSE_WORKER_SCALE.maximum,
 ): WarehouseWorkerVisual {
   const worker = WAREHOUSE_3D_VISUALS.worker;
   const parts: WarehouseWorkerVisualPart[] = [
     {
-      ...basePart("torso", "identity", identityColor, [0, worker.bodyY, 0]),
+      ...basePart("torso", "workwear", WAREHOUSE_WORKER_COLORS.uniform, [0, worker.bodyY, 0]),
       primitive: "cylinder",
       topRadius: worker.bodyTopRadius,
       bottomRadius: worker.bodyBottomRadius,
       height: worker.bodyHeight,
     },
     {
-      ...basePart("vest-panel", "safety", WAREHOUSE_WORKER_COLORS.safety, [0, 0.98, 0.265]),
+      ...basePart("vest-panel", "safety", identityColor, [0, 1.16, 0.175]),
       primitive: "box",
-      size: [0.28, 0.32, 0.035],
+      size: [0.26, 0.3, 0.03],
     },
     {
-      ...basePart("left-arm", "identity", identityColor, [-0.33, 0.96, 0], [0, 0, -0.16]),
+      ...basePart("left-arm", "workwear", WAREHOUSE_WORKER_COLORS.uniform, [-0.235, 1.19, 0], [0, 0, -0.12]),
       primitive: "box",
-      size: [0.14, 0.5, 0.16],
+      size: [0.1, 0.52, 0.12],
     },
     {
-      ...basePart("right-arm", "identity", identityColor, [0.33, 0.96, 0], [0, 0, 0.16]),
+      ...basePart("right-arm", "workwear", WAREHOUSE_WORKER_COLORS.uniform, [0.235, 1.19, 0], [0, 0, 0.12]),
       primitive: "box",
-      size: [0.14, 0.5, 0.16],
+      size: [0.1, 0.52, 0.12],
     },
     {
-      ...basePart("left-hand", "skin", WAREHOUSE_WORKER_COLORS.skin, [-0.37, 0.69, 0]),
+      ...basePart("left-hand", "skin", WAREHOUSE_WORKER_COLORS.skin, [-0.255, 0.9, 0]),
       primitive: "sphere",
-      radius: 0.09,
+      radius: 0.062,
       scale: [1, 1, 1],
     },
     {
-      ...basePart("right-hand", "skin", WAREHOUSE_WORKER_COLORS.skin, [0.37, 0.69, 0]),
+      ...basePart("right-hand", "skin", WAREHOUSE_WORKER_COLORS.skin, [0.255, 0.9, 0]),
       primitive: "sphere",
-      radius: 0.09,
+      radius: 0.062,
       scale: [1, 1, 1],
     },
     {
-      ...basePart("left-leg", "workwear", WAREHOUSE_WORKER_COLORS.workwear, [-0.13, 0.38, 0]),
+      ...basePart("left-leg", "workwear", WAREHOUSE_WORKER_COLORS.workwear, [-0.088, 0.48, 0]),
       primitive: "box",
-      size: [0.18, 0.52, 0.2],
+      size: [0.135, 0.8, 0.15],
     },
     {
-      ...basePart("right-leg", "workwear", WAREHOUSE_WORKER_COLORS.workwear, [0.13, 0.38, 0]),
+      ...basePart("right-leg", "workwear", WAREHOUSE_WORKER_COLORS.workwear, [0.088, 0.48, 0]),
       primitive: "box",
-      size: [0.18, 0.52, 0.2],
+      size: [0.135, 0.8, 0.15],
     },
     {
-      ...basePart("left-boot", "equipment", WAREHOUSE_WORKER_COLORS.equipment, [-0.13, 0.09, 0.07]),
+      ...basePart("left-boot", "equipment", WAREHOUSE_WORKER_COLORS.equipment, [-0.088, 0.045, 0.045]),
       primitive: "box",
-      size: [0.21, 0.12, 0.34],
+      size: [0.155, 0.085, 0.26],
     },
     {
-      ...basePart("right-boot", "equipment", WAREHOUSE_WORKER_COLORS.equipment, [0.13, 0.09, 0.07]),
+      ...basePart("right-boot", "equipment", WAREHOUSE_WORKER_COLORS.equipment, [0.088, 0.045, 0.045]),
       primitive: "box",
-      size: [0.21, 0.12, 0.34],
+      size: [0.155, 0.085, 0.26],
     },
     {
       ...basePart("head", "skin", WAREHOUSE_WORKER_COLORS.skin, [0, worker.headY, 0]),
       primitive: "sphere",
       radius: worker.headRadius,
-      scale: [0.88, 1, 0.88],
+      scale: [0.86, 1, 0.86],
     },
     {
-      ...basePart("hard-hat", "identity", identityColor, [0, 1.67, 0]),
+      ...basePart("hard-hat", "identity", identityColor, [0, 1.715, 0]),
       primitive: "cylinder",
-      topRadius: 0.21,
-      bottomRadius: 0.25,
-      height: 0.12,
+      topRadius: 0.115,
+      bottomRadius: 0.142,
+      height: 0.075,
     },
     {
-      ...basePart("hard-hat-brim", "identity", identityColor, [0, 1.61, 0.035]),
+      ...basePart("hard-hat-brim", "identity", identityColor, [0, 1.678, 0.03]),
       primitive: "box",
-      size: [0.52, 0.035, 0.34],
+      size: [0.3, 0.022, 0.2],
     },
     {
-      ...basePart("scanner", "equipment", WAREHOUSE_WORKER_COLORS.equipment, [0.4, 0.72, 0.13], [-0.25, 0, 0.08]),
+      ...basePart("scanner", "equipment", WAREHOUSE_WORKER_COLORS.equipment, [0.265, 0.94, 0.075], [-0.25, 0, 0.06]),
       primitive: "box",
-      size: [0.11, 0.22, 0.08],
+      size: [0.075, 0.16, 0.055],
     },
   ];
 
   return {
-    figureScale: 1.3,
+    figureScale: Number.isFinite(figureScale) && figureScale > 0
+      ? figureScale
+      : WAREHOUSE_WORKER_SCALE.maximum,
     parts: gesture ? parts.map((part) => applyCountingGesture(part, gesture)) : parts,
+  };
+}
+
+export interface WarehouseWorkerScanCue {
+  /** Figure-local origin at the scanner head. */
+  readonly origin: readonly [number, number, number];
+  /** Unit direction the scan head points, in figure-local space. */
+  readonly direction: readonly [number, number, number];
+  readonly length: number;
+  /** 0..1 brightness, peaking when the operator reaches into the bay. */
+  readonly intensity: number;
+}
+
+const SCAN_HEAD_TILT = 0.35;
+
+/**
+ * A short scan indicator from the scanner head toward the bay face the operator
+ * is counting. It exists only while a counting gesture does -- i.e. only during
+ * service -- and its brightness rides the same gesture, so it needs no timer and
+ * freezes, seeks, and scales with playback exactly like the pose does.
+ */
+export function createWarehouseWorkerScanCue(
+  gesture: WarehouseCountingGesture | null,
+): WarehouseWorkerScanCue | null {
+  if (!gesture) return null;
+
+  const headAngle = gesture.armLift + SCAN_HEAD_TILT;
+  const forward: readonly [number, number, number] = [0, -Math.cos(headAngle), Math.sin(headAngle)];
+  const direction = rotateAboutY(forward, gesture.torsoTwist);
+  const scanner = rotateAboutY(
+    swungFromShoulder(SCANNER_X, SCANNER_REACH, gesture.armLift, 0.05),
+    gesture.torsoTwist,
+  );
+
+  return {
+    origin: [
+      scanner[0] + direction[0] * 0.11,
+      scanner[1] + direction[1] * 0.11,
+      scanner[2] + direction[2] * 0.11,
+    ],
+    direction,
+    length: 0.42 + 0.18 * gesture.scanReach,
+    intensity: 0.3 + 0.55 * gesture.scanReach,
   };
 }

@@ -4,10 +4,16 @@ import { buildRouteTimeline } from "../domain/routeTimeline";
 import { getSimulationSnapshotAtTime } from "../simulation/simulationSnapshot";
 import { createWarehouse3DTransform, type WorldPoint } from "./warehouse3dProjection";
 import { createWarehouseCountingGesture } from "./warehouse3dServiceVisual";
+import { WAREHOUSE_3D_VISUALS } from "./warehouse3dVisuals";
+import { WAREHOUSE_WORKER_COLORS } from "./warehouse3dWorker";
 import {
   createWarehouseWorkerPose,
+  createWarehouseWorkerScanCue,
   createWarehouseWorkerVisual,
   getWarehouseWorkerFacingYaw,
+  getWarehouseWorkerFigureScale,
+  WAREHOUSE_WORKER_DEPTH_POLICY,
+  WAREHOUSE_WORKER_SCALE,
 } from "./warehouse3dWorker";
 
 const timeline = buildRouteTimeline({
@@ -104,7 +110,7 @@ describe("warehouse3dWorker", () => {
 
     expect(withoutColor(worker)).toEqual(withoutColor(recommended));
     expect(worker.figureScale).toBe(recommended.figureScale);
-    expect(worker.figureScale).toBeGreaterThan(1);
+    expect(worker.figureScale).toBe(WAREHOUSE_WORKER_SCALE.maximum);
     expect(worker.parts.map(({ id }) => id)).toEqual(recommended.parts.map(({ id }) => id));
     expect(worker.parts.some(({ id }) => id === "head")).toBe(true);
     expect(worker.parts.some(({ id }) => id === "torso")).toBe(true);
@@ -207,5 +213,198 @@ describe("warehouse worker counting pose", () => {
     const recommended = createWarehouseWorkerVisual("#0f9f75", gesture);
 
     expect(withoutColor(recommended)).toEqual(withoutColor(countingVisual));
+  });
+});
+
+describe("warehouse worker visual scale", () => {
+  test("shrinks the operator for wide context and restores full size up close", () => {
+    const overview = getWarehouseWorkerFigureScale(1);
+    const aisle = getWarehouseWorkerFigureScale(1.2);
+    const workerFocus = getWarehouseWorkerFigureScale(1.65);
+
+    expect(overview).toBeLessThan(aisle);
+    expect(aisle).toBeLessThan(workerFocus);
+    expect(overview).toBe(WAREHOUSE_WORKER_SCALE.minimum);
+    expect(workerFocus).toBe(WAREHOUSE_WORKER_SCALE.maximum);
+  });
+
+  test("stays bounded and human-readable across the whole zoom range", () => {
+    for (const ratio of [0.4, 0.55, 1, 1.35, 2, 3.25, 12]) {
+      const scale = getWarehouseWorkerFigureScale(ratio);
+      expect(Number.isFinite(scale)).toBe(true);
+      expect(scale).toBeGreaterThanOrEqual(WAREHOUSE_WORKER_SCALE.minimum);
+      expect(scale).toBeLessThanOrEqual(WAREHOUSE_WORKER_SCALE.maximum);
+    }
+    expect(WAREHOUSE_WORKER_SCALE.minimum).toBeGreaterThan(0.5);
+    expect(getWarehouseWorkerFigureScale(Number.NaN)).toBe(WAREHOUSE_WORKER_SCALE.maximum);
+  });
+
+  test("applies one scale rule to both route identities without moving the figure", () => {
+    const scale = getWarehouseWorkerFigureScale(1.1);
+    const worker = createWarehouseWorkerVisual("#2563eb", null, scale);
+    const recommended = createWarehouseWorkerVisual("#0f9f75", null, scale);
+    const full = createWarehouseWorkerVisual("#2563eb");
+
+    expect(worker.figureScale).toBe(scale);
+    expect(recommended.figureScale).toBe(scale);
+    expect(withoutColor(worker)).toEqual(withoutColor(recommended));
+    // Scale is a group transform only -- part offsets are untouched.
+    expect(withoutColor(worker)).toEqual(withoutColor(full));
+    expect(createWarehouseWorkerVisual("#2563eb", null, 0).figureScale)
+      .toBe(WAREHOUSE_WORKER_SCALE.maximum);
+    expect(createWarehouseWorkerVisual("#2563eb", null, Number.NaN).figureScale)
+      .toBe(WAREHOUSE_WORKER_SCALE.maximum);
+  });
+});
+
+describe("warehouse worker depth policy", () => {
+  test("renders the body as ordinary scene geometry that racking can occlude", () => {
+    expect(WAREHOUSE_WORKER_DEPTH_POLICY.body.depthTest).toBe(true);
+    expect(WAREHOUSE_WORKER_DEPTH_POLICY.body.depthWrite).toBe(true);
+    // There is no draw-through pass left: the only exemption is a small locator.
+    expect(Object.keys(WAREHOUSE_WORKER_DEPTH_POLICY)).toEqual(["body", "locator"]);
+  });
+
+  test("limits depth-independent help to a small locator aid", () => {
+    const { locator, body } = WAREHOUSE_WORKER_DEPTH_POLICY;
+
+    expect(locator.depthTest).toBe(false);
+    expect(locator.renderOrder).toBeGreaterThan(body.renderOrder);
+    expect(locator.pipRadius).toBeGreaterThan(0);
+    // Small enough to read as a marker rather than a second body.
+    expect(locator.pipRadius).toBeLessThan(WAREHOUSE_3D_VISUALS.worker.headRadius);
+  });
+
+  test("gives no worker part its own depth exemption", () => {
+    const visual = createWarehouseWorkerVisual("#2f5d9e");
+
+    for (const part of visual.parts) {
+      expect(part).not.toHaveProperty("silhouette");
+      expect(part).not.toHaveProperty("depthTest");
+    }
+  });
+
+  test("uses identical part structure for both route identities", () => {
+    const worker = createWarehouseWorkerVisual("#2f5d9e");
+    const recommended = createWarehouseWorkerVisual("#2f7d5f");
+
+    expect(worker.parts.map(({ id }) => id)).toEqual(recommended.parts.map(({ id }) => id));
+  });
+});
+
+describe("warehouse worker scan cue", () => {
+  const gesture = createWarehouseCountingGesture(3);
+
+  test("exists only while the operator is counting", () => {
+    expect(createWarehouseWorkerScanCue(null)).toBeNull();
+    expect(createWarehouseWorkerScanCue(gesture)).not.toBeNull();
+  });
+
+  test("starts at the scanner head and points away from the operator", () => {
+    const cue = createWarehouseWorkerScanCue(gesture)!;
+    const scanner = createWarehouseWorkerVisual("#2563eb", gesture).parts
+      .find(({ id }) => id === "scanner")!;
+    const distanceToScanner = Math.hypot(
+      cue.origin[0] - scanner.position[0],
+      cue.origin[1] - scanner.position[1],
+      cue.origin[2] - scanner.position[2],
+    );
+
+    expect(distanceToScanner).toBeLessThan(0.25);
+    // Forward is +Z in figure space, which the pose already aims at the location.
+    expect(cue.direction[2]).toBeGreaterThan(0.5);
+    expect(Math.hypot(...cue.direction)).toBeCloseTo(1);
+    expect(cue.length).toBeGreaterThan(0.4);
+    expect(cue.length).toBeLessThan(1);
+  });
+
+  test("is deterministic and bounded across the scan cycle", () => {
+    expect(createWarehouseWorkerScanCue(gesture)).toEqual(createWarehouseWorkerScanCue(gesture));
+
+    for (const elapsed of [0, 0.7, 1.4, 2.1, Number.NaN, -5]) {
+      const cue = createWarehouseWorkerScanCue(createWarehouseCountingGesture(elapsed))!;
+      expect([...cue.origin, ...cue.direction, cue.length, cue.intensity].every(Number.isFinite))
+        .toBe(true);
+      expect(cue.intensity).toBeGreaterThan(0);
+      expect(cue.intensity).toBeLessThanOrEqual(1);
+    }
+  });
+
+  test("brightens and extends as the operator reaches into the bay", () => {
+    const resting = createWarehouseWorkerScanCue(createWarehouseCountingGesture(0))!;
+    const reaching = createWarehouseWorkerScanCue(
+      createWarehouseCountingGesture(1 / (2 * 0.45)),
+    )!;
+
+    expect(reaching.intensity).toBeGreaterThan(resting.intensity);
+    expect(reaching.length).toBeGreaterThan(resting.length);
+  });
+});
+
+describe("warehouse worker proportions", () => {
+  const visual = createWarehouseWorkerVisual("#2f5d9e");
+  const part = (id: string) => {
+    const found = visual.parts.find((candidate) => candidate.id === id);
+    if (!found) throw new Error(`Missing worker part "${id}"`);
+    return found;
+  };
+
+  test("reads as an operator rather than a toy pawn", () => {
+    const hat = part("hard-hat");
+    const head = part("head");
+    if (hat.primitive !== "cylinder" || head.primitive !== "sphere") {
+      throw new Error("Unexpected worker primitives");
+    }
+    const totalHeight = hat.position[1] + hat.height / 2;
+    const headDiameter = head.radius * 2;
+
+    // Roughly a seven-head figure; a toy/mascot figure is three or four.
+    expect(totalHeight / headDiameter).toBeGreaterThan(6);
+    expect(headDiameter / totalHeight).toBeLessThan(0.16);
+  });
+
+  test("stands on legs long enough to look human", () => {
+    const leg = part("left-leg");
+    const hat = part("hard-hat");
+    if (leg.primitive !== "box" || hat.primitive !== "cylinder") {
+      throw new Error("Unexpected worker primitives");
+    }
+    const totalHeight = hat.position[1] + hat.height / 2;
+
+    expect(leg.size[1] / totalHeight).toBeGreaterThan(0.4);
+  });
+
+  test("keeps shoulders narrow relative to height", () => {
+    const arm = part("right-arm");
+    const hat = part("hard-hat");
+    if (arm.primitive !== "box" || hat.primitive !== "cylinder") {
+      throw new Error("Unexpected worker primitives");
+    }
+    const totalHeight = hat.position[1] + hat.height / 2;
+    const shoulderSpan = arm.position[0] * 2 + arm.size[0];
+
+    expect(shoulderSpan / totalHeight).toBeLessThan(0.4);
+  });
+
+  test("carries route identity on PPE only, over muted workwear", () => {
+    const worker = createWarehouseWorkerVisual("#2f5d9e");
+    const recommended = createWarehouseWorkerVisual("#2f7d5f");
+    const identityParts = worker.parts
+      .filter((candidate, index) => candidate.color !== recommended.parts[index].color)
+      .map(({ id }) => id);
+
+    expect(identityParts).toEqual(["vest-panel", "hard-hat", "hard-hat-brim"]);
+    // Trousers, torso, and boots are workwear, not identity paint.
+    expect(worker.parts.find(({ id }) => id === "torso")?.color)
+      .toBe(WAREHOUSE_WORKER_COLORS.uniform);
+    expect(worker.parts.find(({ id }) => id === "left-leg")?.color)
+      .toBe(WAREHOUSE_WORKER_COLORS.workwear);
+  });
+
+  test("stays well under its previous visual footprint at every zoom", () => {
+    // The pre-S7E figure ran 0.85 - 1.30; anything at or above that reads oversized.
+    expect(WAREHOUSE_WORKER_SCALE.maximum).toBeLessThan(1.3);
+    expect(WAREHOUSE_WORKER_SCALE.minimum).toBeLessThan(0.85);
+    expect(getWarehouseWorkerFigureScale(1)).toBe(WAREHOUSE_WORKER_SCALE.minimum);
   });
 });

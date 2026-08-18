@@ -906,178 +906,367 @@
 }
 
 /* Shared-clock route comparison -- two routes, one playback controller. */
-.route-simulation-comparison {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-4);
-  border: 1px solid var(--border);
+/* ------------------------------------------------------------------
+   Digital-twin shell. A dark operations surface that frames the 3D
+   warehouse instead of stacking cards above it. Tokens are local to the
+   shell so the surrounding light workflow page is untouched.
+   ------------------------------------------------------------------ */
+.twin {
+  /* Dark industrial, not black: every step is a visible luminance move. */
+  --twin-bg: #141a22;
+  --twin-panel: #1d2530;
+  --twin-panel-raised: #26303c;
+  --twin-line: #3d4a59;
+  --twin-text: #f2f6fa;
+  --twin-muted: #a7b6c4;
+  --twin-accent: #4fd6c4;
+  --twin-worker: #74a4e2;
+  --twin-recommended: #5cbf9c;
+
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: min(78vh, 860px);
+  margin-top: var(--space-6);
+  border: 1px solid var(--twin-line);
   border-radius: var(--radius-lg);
-  background: var(--surface);
+  background: var(--twin-bg);
+  color: var(--twin-text);
+  overflow: hidden;
 }
-.route-simulation-comparison__heading h2 {
-  margin-bottom: var(--space-2);
+
+/* Top application bar */
+.twin__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--twin-line);
+  background: var(--twin-panel);
 }
-.route-simulation-comparison__eyebrow {
-  margin-bottom: var(--space-1);
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+.twin__identity h2 {
+  margin: 0;
+  color: var(--twin-text);
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+.twin__identity p {
+  margin: 2px 0 0;
+  color: var(--twin-muted);
+  font-size: 11px;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
-.route-simulation-comparison__conditions {
+.twin__modes {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-2) var(--space-4);
-  flex-wrap: wrap;
-  padding: var(--space-3);
-  border-left: 3px solid var(--target-selected);
-  background: var(--target-selected-bg);
-  color: var(--text-muted);
-  font-size: 13px;
-}
-.route-simulation-comparison__conditions strong {
-  color: var(--text-h);
-}
-.route-simulation-comparison__shared-controls {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: end;
-  gap: var(--space-4);
-  padding: var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
-}
-.route-simulation-comparison__time span,
-.route-simulation-comparison__time strong {
-  display: block;
-}
-.route-simulation-comparison__time span {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-.route-simulation-comparison__time strong {
-  margin-top: var(--space-1);
-  color: var(--text-h);
-  font-size: 20px;
-  white-space: nowrap;
-}
-.route-simulation-comparison__controls {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: auto auto minmax(160px, 1fr) auto;
-  align-items: end;
+  align-items: center;
   gap: var(--space-3);
-}
-.route-simulation-comparison__transport,
-.route-simulation-comparison__renderer-modes > div,
-.route-simulation-comparison__rates > div {
-  display: flex;
-  gap: var(--space-2);
   flex-wrap: wrap;
 }
-.route-simulation-comparison__rates,
-.route-simulation-comparison__renderer-modes {
-  min-width: 0;
+.twin__switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   border: 0;
 }
-.route-simulation-comparison__rates legend,
-.route-simulation-comparison__renderer-modes legend,
-.route-simulation-comparison__seek {
-  color: var(--text-muted);
+.twin__switch legend {
+  float: left;
+  padding: 0 var(--space-2) 0 0;
+  color: var(--twin-muted);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.twin__switch > div {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--twin-line);
+  border-radius: var(--radius);
+  background: var(--twin-bg);
+}
+.twin button {
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--twin-muted);
+  font: inherit;
   font-size: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
 }
-.route-simulation-comparison__rates legend,
-.route-simulation-comparison__renderer-modes legend {
-  margin-bottom: var(--space-1);
+.twin button:hover {
+  background: var(--twin-panel-raised);
+  color: var(--twin-text);
 }
-.route-simulation-comparison__seek {
+.twin button[aria-pressed="true"] {
+  background: var(--twin-panel-raised);
+  color: var(--twin-accent);
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--twin-accent) 55%, transparent);
+}
+.twin button:disabled {
+  color: color-mix(in srgb, var(--twin-muted) 55%, transparent);
+  cursor: not-allowed;
+}
+.twin button:focus-visible {
+  outline: 2px solid var(--twin-accent);
+  outline-offset: 1px;
+}
+
+/* Body: telemetry | stage | camera rail */
+.twin__body {
+  display: grid;
+  grid-template-columns: minmax(210px, 250px) minmax(0, 1fr) auto;
+  min-height: 0;
+}
+.twin__ops {
   min-width: 0;
+  overflow-y: auto;
+  padding: var(--space-3);
+  border-right: 1px solid var(--twin-line);
+  background: var(--twin-panel);
+}
+.twin__stage {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  background: var(--twin-bg);
+}
+.twin__stage--compare {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--twin-line);
+}
+.twin__minimap {
+  position: absolute;
+  opacity: 0.88;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  width: 190px;
+  padding: var(--space-2);
+  border: 1px solid var(--twin-line);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--twin-panel) 94%, transparent);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 45%);
+  pointer-events: none;
+  overflow: hidden;
+}
+.twin__minimap .warehouse-map {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+/* The minimap is a locator, not a second control surface. */
+.twin__minimap .warehouse-map__legend,
+.twin__minimap .warehouse-map__hint,
+.twin__minimap h2,
+.twin__minimap p,
+.twin__minimap button {
+  display: none;
+}
+
+/* Right camera rail */
+.camera-toolbar {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 2px;
+  padding: var(--space-2);
+  border-left: 1px solid var(--twin-line);
+  background: var(--twin-panel);
 }
-.route-simulation-comparison__seek input {
-  width: 100%;
-  max-width: 100%;
+.camera-toolbar__button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 62px;
+  padding: 7px 2px;
 }
-.route-simulation-comparison__primary {
-  background: var(--target-selected) !important;
-  border-color: var(--target-selected) !important;
-  color: #fff !important;
-  font-weight: 600 !important;
+.camera-toolbar__button svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
 }
-.route-simulation-comparison__rates button[aria-pressed="true"],
-.route-simulation-comparison__renderer-modes button[aria-pressed="true"],
-.route-simulation-comparison__view-modes button[aria-pressed="true"],
-.route-simulation-comparison__explore-routes button[aria-pressed="true"],
-.route-simulation-comparison__camera-presets button[aria-pressed="true"] {
-  border-color: var(--target-selected);
-  color: var(--target-selected);
+.camera-toolbar__button {
+  color: var(--twin-muted);
+}
+.camera-toolbar__caption {
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
+  text-align: center;
+}
+
+/* Bottom simulation timeline */
+.twin__timeline {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--twin-line);
+  background: var(--twin-panel);
+}
+.twin__transport {
+  display: flex;
+  gap: var(--space-2);
+}
+.twin__transport button {
+  border: 1px solid var(--twin-line);
+}
+.twin__primary[aria-pressed],
+.twin__primary {
+  background: var(--twin-accent);
+  color: #07120f;
   font-weight: 700;
 }
-.route-simulation-comparison__camera-controls {
-  min-width: 0;
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-3) var(--space-4);
-  flex-wrap: wrap;
-  padding: var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
+.twin__primary:hover {
+  color: #07120f;
 }
-.route-simulation-comparison__view-modes,
-.route-simulation-comparison__explore-routes,
-.route-simulation-comparison__camera-presets {
+.twin__primary:disabled {
+  background: var(--twin-panel-raised);
+  color: var(--twin-muted);
+  cursor: not-allowed;
+}
+.twin__clock {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.twin__clock span {
+  color: var(--twin-muted);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.twin__clock strong {
+  color: var(--twin-text);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.twin__seek {
+  display: block;
   min-width: 0;
+}
+.twin__seek input {
+  width: 100%;
+  accent-color: var(--twin-accent);
+}
+.twin__rates {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   border: 0;
 }
-.route-simulation-comparison__view-modes > div,
-.route-simulation-comparison__explore-routes > div,
-.route-simulation-comparison__camera-presets > div {
+.twin__rates legend {
+  float: left;
+  padding-right: var(--space-2);
+  color: var(--twin-muted);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.twin__rates > div {
   display: flex;
-  gap: var(--space-2);
-  flex-wrap: wrap;
+  gap: 2px;
 }
-.route-simulation-comparison__view-modes legend,
-.route-simulation-comparison__explore-routes legend,
-.route-simulation-comparison__camera-presets legend {
-  margin-bottom: var(--space-1);
-  color: var(--text-muted);
-  font-size: 12px;
-}
-.route-simulation-comparison__camera-presets {
-  flex: 1 1 360px;
-}
-.route-simulation-comparison__camera-reset {
-  margin-left: auto;
-}
-.route-simulation-comparison__camera-help {
-  flex: 1 0 100%;
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-.route-simulation-comparison__viewports {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+
+/* Operations telemetry */
+.ops-panel {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-4);
-  align-items: start;
 }
-.route-simulation-comparison__viewports--explore {
-  grid-template-columns: minmax(0, 1fr);
+.ops-panel__title {
+  margin: 0;
+  color: var(--twin-text);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
+.ops-panel__scope {
+  margin: 2px 0 var(--space-2);
+  color: var(--twin-text);
+  font-size: 12px;
+}
+.ops-panel__grid {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.ops-panel__grid--pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ops-panel__metric {
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--twin-line);
+  border-radius: var(--radius);
+  background: var(--twin-panel-raised);
+}
+.ops-panel__section + .ops-panel__section {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--twin-line);
+}
+.ops-panel__metric-label {
+  display: block;
+  color: var(--twin-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.ops-panel__metric-value {
+  display: block;
+  margin-top: 2px;
+  color: var(--twin-text);
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+.ops-panel__metric-hint {
+  display: block;
+  color: color-mix(in srgb, var(--twin-muted) 85%, transparent);
+  font-size: 10px;
+}
+.ops-panel__state {
+  margin: var(--space-2) 0 0;
+  color: var(--twin-accent);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.ops-panel__state[data-task-state="travel"] {
+  color: var(--twin-text);
+}
+.ops-panel__conditions {
+  margin: var(--space-1) 0 0;
+  color: var(--twin-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.ops-panel__conditions strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--twin-text);
+}
+.ops-panel__disclosure {
+  margin: var(--space-2) 0 0;
+  color: var(--twin-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .route-simulation-viewport {
   min-width: 0;
   display: flex;
@@ -1178,14 +1367,22 @@
   z-index: 1;
   width: max-content;
   max-width: min(230px, calc(100% - var(--space-4)));
-  padding: var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--surface) 90%, transparent);
-  box-shadow: 0 1px 6px rgb(15 23 42 / 12%);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--text-muted);
+  border-radius: 2px var(--radius) var(--radius) 2px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  box-shadow: 0 1px 8px rgb(15 23 42 / 14%);
   pointer-events: none;
   font-size: 12px;
   line-height: 1.35;
+  transition: border-color 160ms ease, opacity 160ms ease;
+}
+/* Travelling is deliberately quiet; the panel gains weight when work starts. */
+.route-simulation-viewport__hud--travel {
+  opacity: 0.82;
+}
+.route-simulation-viewport__hud--service {
+  border-left-color: var(--focus);
 }
 .route-simulation-viewport__hud p {
   margin: var(--space-1) 0 0;
@@ -1198,9 +1395,9 @@
   align-items: center;
   gap: var(--space-2);
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 .route-simulation-viewport__hud-dot {
@@ -1216,17 +1413,24 @@
 .route-simulation-viewport__hud--service .route-simulation-viewport__hud-dot {
   background: var(--focus);
 }
-.route-simulation-viewport__hud-location span {
-  display: block;
-  color: var(--text-muted);
-  font-size: 11px;
-}
 .route-simulation-viewport__hud-location strong {
+  display: block;
   color: var(--text-h);
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
-.route-simulation-viewport__hud-class {
+.route-simulation-viewport__hud-class span {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-muted) 16%, transparent);
   color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 .route-simulation-viewport__hud-progress {
   display: flex;
@@ -1263,9 +1467,14 @@
 .route-simulation-viewport__hud-times {
   display: flex;
   justify-content: space-between;
-  gap: var(--space-2);
+  gap: var(--space-3);
   color: var(--text-muted);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+.route-simulation-viewport__hud-times span:first-child {
+  color: var(--text-h);
+  font-weight: 700;
 }
 .route-simulation-viewport__time-breakdown {
   display: grid;
@@ -1299,6 +1508,185 @@
   color: var(--text-h);
   font-size: 15px;
 }
+/* Viewport cards inside the shell: no card chrome, the canvas fills the stage. */
+.twin .route-simulation-viewport {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--twin-bg);
+}
+.twin .route-simulation-viewport__header {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--twin-line);
+}
+.twin .route-simulation-viewport__header h3 {
+  color: var(--twin-text);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.twin .route-simulation-viewport--worker .route-simulation-viewport__header h3 {
+  color: var(--twin-worker);
+}
+.twin .route-simulation-viewport--recommended .route-simulation-viewport__header h3 {
+  color: var(--twin-recommended);
+}
+.twin .route-simulation-viewport__status {
+  border-color: var(--twin-line);
+  color: var(--twin-muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.twin .route-simulation-viewport__status--inProgress,
+.twin .route-simulation-viewport__status--completed {
+  border-color: var(--twin-accent);
+  color: var(--twin-accent);
+}
+.twin .route-simulation-viewport__stage {
+  min-height: 0;
+}
+.twin .warehouse-3d,
+.twin .route-simulation-viewport--explore .warehouse-3d {
+  height: 100%;
+  min-height: 320px;
+  border: 0;
+  border-radius: 0;
+  background: var(--twin-bg);
+}
+.twin .warehouse-3d__fallback {
+  padding: var(--space-3);
+}
+.twin .route-simulation-viewport__stage > .warehouse-map {
+  padding: var(--space-3);
+}
+
+/* Counting HUD on the dark surface */
+.twin .route-simulation-viewport__hud {
+  left: var(--space-3);
+  bottom: var(--space-3);
+  border: 1px solid var(--twin-line);
+  border-left: 3px solid var(--twin-line);
+  background: color-mix(in srgb, var(--twin-panel) 96%, transparent);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 55%), 0 0 0 1px rgb(0 0 0 / 35%);
+  color: var(--twin-text);
+}
+.twin .route-simulation-viewport__hud--service {
+  border-color: color-mix(in srgb, var(--twin-accent) 45%, var(--twin-line));
+}
+.twin .route-simulation-viewport__hud-location strong {
+  font-size: 15px;
+}
+.twin .route-simulation-viewport__hud-progress progress {
+  height: 8px;
+}
+.twin .route-simulation-viewport__hud--service {
+  border-left-color: var(--twin-accent);
+}
+.twin .route-simulation-viewport__hud-state,
+.twin .route-simulation-viewport__hud-times,
+.twin .route-simulation-viewport__hud-class span {
+  color: var(--twin-muted);
+}
+.twin .route-simulation-viewport__hud--service .route-simulation-viewport__hud-state {
+  color: var(--twin-accent);
+}
+.twin .route-simulation-viewport__hud--service .route-simulation-viewport__hud-dot {
+  background: var(--twin-accent);
+}
+.twin .route-simulation-viewport__hud-location strong,
+.twin .route-simulation-viewport__hud-progress span,
+.twin .route-simulation-viewport__hud-times span:first-child {
+  color: var(--twin-text);
+}
+.twin .route-simulation-viewport__hud-progress progress {
+  background: var(--twin-line);
+}
+.twin .route-simulation-viewport__hud-progress progress::-webkit-progress-bar {
+  background: var(--twin-line);
+}
+.twin .route-simulation-viewport__hud-progress progress::-webkit-progress-value {
+  background: var(--twin-accent);
+}
+.twin .route-simulation-viewport__hud-progress progress::-moz-progress-bar {
+  background: var(--twin-accent);
+}
+
+/* Narrower desktops: drop the minimap before the telemetry column. */
+@media (max-width: 1180px) {
+  .twin__minimap {
+    display: none;
+  }
+  .twin__body {
+    grid-template-columns: minmax(190px, 220px) minmax(0, 1fr) auto;
+  }
+}
+
+/* Tablet and below: the twin becomes a stack, 3D still first. */
+@media (max-width: 900px) {
+  .twin {
+    min-height: 0;
+  }
+  .twin__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .twin__stage {
+    order: -1;
+  }
+  .twin__stage--compare {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: minmax(0, 1fr);
+  }
+  .twin__ops {
+    border-right: 0;
+    border-top: 1px solid var(--twin-line);
+  }
+  .camera-toolbar {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    border-left: 0;
+    border-top: 1px solid var(--twin-line);
+  }
+  .camera-toolbar__button {
+    width: auto;
+    min-width: 56px;
+    min-height: 44px;
+  }
+  .twin__timeline {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+  .twin .warehouse-3d {
+    min-height: 300px;
+  }
+  .twin .route-simulation-viewport {
+    min-height: 340px;
+  }
+}
+
+@media (max-width: 480px) {
+  .twin__bar {
+    gap: var(--space-2);
+  }
+  .twin__modes {
+    width: 100%;
+  }
+  .twin button {
+    min-height: 44px;
+  }
+  .twin__seek input {
+    min-height: 44px;
+  }
+  .ops-panel__grid--pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .simulation-marker {
   pointer-events: none;
 }

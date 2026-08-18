@@ -112,6 +112,8 @@ export interface WarehouseServiceProgressSegment {
 export interface WarehouseServiceProgressRing {
   readonly totalSegments: number;
   readonly filledSegments: number;
+  /** Quantized filled share, for wide views that draw one arc instead of segments. */
+  readonly filledFraction: number;
   readonly segmentAngleRadians: number;
   readonly segments: readonly WarehouseServiceProgressSegment[];
 }
@@ -133,6 +135,7 @@ export function createWarehouseServiceProgressRing(
   return {
     totalSegments,
     filledSegments,
+    filledFraction: filledSegments / totalSegments,
     segmentAngleRadians,
     segments: Array.from({ length: totalSegments }, (_unused, index) => ({
       index,
@@ -230,5 +233,76 @@ export function createWarehouseServiceCompletionVisual(
     locationId: latest.locationId,
     position: projectDisplayPointToWarehouse3D(point, transform),
     intensity: clampUnitInterval(1 - latest.elapsedSinceEnd / SERVICE_COMPLETION_PULSE_SECONDS),
+  };
+}
+
+/** How long, in physical service seconds, the automatic shot takes to move in. */
+export const STORY_CAMERA_ENTRY_SECONDS = 1.2;
+
+export type WarehouseStoryCameraPhase = "entering" | "holding" | "leaving";
+
+export interface WarehouseStoryCameraFocus {
+  readonly locationId: NodeId;
+  readonly point: WorldPoint;
+  /** 0 = contextual view, 1 = full service shot. */
+  readonly blend: number;
+  readonly phase: WarehouseStoryCameraPhase;
+}
+
+export interface WarehouseStoryCameraOptions {
+  /** Compare stays under synchronized manual control; only Explore tells the story. */
+  readonly viewMode: "compare" | "explore";
+  /** The one service event the viewer has taken manual camera control of, if any. */
+  readonly suppressedLocationId: NodeId | null;
+}
+
+/**
+ * The whole automatic-camera policy, as a pure function of existing truth.
+ *
+ * Travel yields nothing, so the viewer keeps their contextual view. Service
+ * blends in over the first `STORY_CAMERA_ENTRY_SECONDS` of count work, holds,
+ * then blends back out across the existing completion window. Because the blend
+ * is read from physical service time rather than accumulated, it freezes on
+ * pause, lands correctly on any seek, and needs no transition state to reset.
+ */
+export function getWarehouseStoryCameraFocus(
+  timeline: RouteTimeline,
+  snapshot: SimulationSnapshot,
+  transform: Warehouse3DTransform,
+  coordinates: ReadonlyMap<NodeId, Point>,
+  options: WarehouseStoryCameraOptions,
+): WarehouseStoryCameraFocus | null {
+  if (options.viewMode !== "explore") return null;
+
+  const current = snapshot.current;
+  if (current?.kind === "service") {
+    if (options.suppressedLocationId === current.locationId) return null;
+    const point = coordinates.get(current.locationId);
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+
+    const blend = clampUnitInterval(safeSeconds(current.elapsedSeconds) / STORY_CAMERA_ENTRY_SECONDS);
+    return {
+      locationId: current.locationId,
+      point: projectDisplayPointToWarehouse3D(point, transform),
+      blend,
+      phase: blend >= 1 ? "holding" : "entering",
+    };
+  }
+
+  // Leaving reuses the completion window, so the shot retreats over exactly the
+  // same span the completion pulse occupies -- no second window to keep in sync.
+  const completion = createWarehouseServiceCompletionVisual(
+    timeline,
+    snapshot,
+    transform,
+    coordinates,
+  );
+  if (!completion || options.suppressedLocationId === completion.locationId) return null;
+
+  return {
+    locationId: completion.locationId,
+    point: completion.position,
+    blend: completion.intensity,
+    phase: "leaving",
   };
 }

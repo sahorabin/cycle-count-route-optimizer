@@ -51,10 +51,6 @@ function formatReplayTime(totalSeconds: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-function formatDistance(distanceMeters: number): string {
-  return distanceMeters.toLocaleString(undefined, { maximumFractionDigits: 1 });
-}
-
 function routeStatus(snapshot: SimulationSnapshot): "ready" | "inProgress" | "completed" {
   if (snapshot.isComplete) return "completed";
   if (snapshot.timeSeconds === 0) return "ready";
@@ -98,7 +94,6 @@ export function RouteSimulationViewport({
     () => new Map(graph.locations.map((location) => [location.id, location.label])),
     [graph.locations],
   );
-  const destinationCount = Math.max(0, input.timeline.order.length - 1);
   const status = routeStatus(snapshot);
   const statusLabel = {
     ready: t("replay.status.ready"),
@@ -161,6 +156,7 @@ export function RouteSimulationViewport({
             cameraResetRequest={cameraResetRequest}
             cameraChannel={cameraChannel}
             cameraAuthority={cameraAuthority}
+            viewMode={viewMode}
             accessibleLabel={
               mode === "worker" ? t("replay.canvas.worker") : t("replay.canvas.recommended")
             }
@@ -194,11 +190,13 @@ export function RouteSimulationViewport({
           {service ? (
             <>
               <p className="route-simulation-viewport__hud-location">
-                <span>{t("replay.hud.location")}</span>
+                <span className="visually-hidden">{t("replay.hud.location")}</span>
                 <strong>{locationLabels.get(service.locationId) ?? service.locationId}</strong>
               </p>
               {serviceClassLabel ? (
-                <p className="route-simulation-viewport__hud-class">{serviceClassLabel}</p>
+                <p className="route-simulation-viewport__hud-class">
+                  <span>{serviceClassLabel}</span>
+                </p>
               ) : null}
               <p className="route-simulation-viewport__hud-progress">
                 <progress
@@ -222,41 +220,6 @@ export function RouteSimulationViewport({
         </div>
       </div>
 
-      <div className="route-simulation-viewport__stats" aria-label={t("replay.kpis")}>
-        <div>
-          <span>{t("replay.distance")}</span>
-          <strong>
-            {formatDistance(snapshot.distanceTraveled)} {t("units.meters")} /{" "}
-            {formatDistance(input.timeline.totalDistance)} {t("units.meters")}
-          </strong>
-        </div>
-        <div>
-          <span>{t("replay.completed")}</span>
-          <strong>
-            {snapshot.completedDestinationIds.length} / {destinationCount}
-          </strong>
-        </div>
-      </div>
-      <div
-        className="route-simulation-viewport__time-breakdown"
-        aria-label={t("replay.physicalTimeBreakdown")}
-      >
-        <div>
-          <span>{t("replay.travelTime")}</span>
-          <strong>{formatReplayTime(input.timeline.walkingDurationSeconds)}</strong>
-        </div>
-        <div>
-          <span>{t("replay.serviceTime")}</span>
-          <strong>{formatReplayTime(input.timeline.serviceDurationSeconds)}</strong>
-        </div>
-        <div>
-          <span>{t("replay.totalPhysicalTime")}</span>
-          <strong>{formatReplayTime(input.timeline.totalDurationSeconds)}</strong>
-        </div>
-      </div>
-      <p className="route-simulation-viewport__service-disclosure">
-        {t("replay.syntheticServiceDisclosure")}
-      </p>
     </article>
   );
 }

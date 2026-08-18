@@ -21,6 +21,8 @@ export type WarehouseEnvironmentBoxKind =
   | "rack-shelf"
   | "pallet"
   | "carton"
+  | "rack-guard"
+  | "aisle-sign"
   | "aisle-zone"
   | "aisle-marking"
   | "boundary-marking"
@@ -65,6 +67,7 @@ export interface WarehouseAisleVisual {
 }
 
 export interface WarehouseBoundaryVisual {
+  readonly signage: readonly WarehouseEnvironmentBoxVisual[];
   readonly floor: WarehouseEnvironmentBoxVisual;
   readonly perimeterMarkings: readonly WarehouseEnvironmentBoxVisual[];
   readonly walls: readonly WarehouseEnvironmentBoxVisual[];
@@ -86,14 +89,16 @@ export interface WarehouseEnvironmentRenderSet {
 
 /** Renderer-only decorative dimensions; none represent measured warehouse engineering data. */
 export const WAREHOUSE_3D_ENVIRONMENT = {
-  rackHeight: 1.24,
-  shelfLevels: [0.32, 0.66, 1] as const,
+  /** Four-level racking that stands clearly taller than the operator. */
+  rackHeight: 2.3,
+  shelfLevels: [0.42, 0.9, 1.38, 1.86] as const,
   floorPadding: 1,
-  wallHeight: 2.45,
-  overheadHeight: 2.85,
+  wallHeight: 3.2,
+  overheadHeight: 3.6,
   minimumBayCount: 3,
   maximumBayCount: 6,
   targetBayDepth: 1.65,
+  guardHeight: 0.16,
 } as const;
 
 interface WorldRect {
@@ -218,7 +223,7 @@ function buildRackVisual(
     const bayCenterZ = footprint.minZ + (bayIndex + 0.5) * bayDepth;
     shelfLevels.slice(0, -1).forEach((level, levelIndex) => {
       const seed = stableHash(`${id}:${bayIndex}:${levelIndex}`);
-      if (seed % 7 > 1) return;
+      if (seed % 7 > 2) return;
       const palletHeight = 0.045;
       const palletWidth = Math.max(postSize, width * 0.68);
       const palletDepth = Math.max(postSize, bayDepth * 0.68);
@@ -251,6 +256,17 @@ function buildRackVisual(
         rackId: id,
       });
     });
+  }
+
+  // Rack-end protectors: a real run is guarded where trucks turn into the aisle.
+  const guardHeight = WAREHOUSE_3D_ENVIRONMENT.guardHeight;
+  for (const z of [footprint.minZ + postSize, footprint.maxZ - postSize]) {
+    overviewMembers.push(box(
+      `${id}-guard-${z > centerZ ? "rear" : "front"}`,
+      "rack-guard",
+      [centerX, guardHeight / 2, z],
+      [width * 0.94, guardHeight, postSize * 1.6],
+    ));
   }
 
   return {
@@ -357,12 +373,70 @@ function buildBoundary(transform: Warehouse3DTransform): WarehouseBoundaryVisual
   ));
 
   return {
+    signage: [],
     floor: box("warehouse-floor", "boundary-marking", [centerX, -0.1, centerZ], [width, 0.12, depth]),
     perimeterMarkings,
     walls,
     columns,
     overheadFixtures,
   };
+}
+
+/** Aisle-end sign posts and panels, one per rack column. Decorative only. */
+function buildSignage(
+  racks: readonly WarehouseRackVisual[],
+): WarehouseEnvironmentBoxVisual[] {
+  const signage: WarehouseEnvironmentBoxVisual[] = [];
+  const columns = new Map<string, WarehouseRackVisual>();
+  for (const rack of racks) {
+    const columnKey = rack.id.split("-").slice(0, 2).join("-");
+    const existing = columns.get(columnKey);
+    if (!existing || rack.footprint.minZ < existing.footprint.minZ) {
+      columns.set(columnKey, rack);
+    }
+  }
+
+  let index = 0;
+  for (const rack of columns.values()) {
+    const x = (rack.footprint.minX + rack.footprint.maxX) / 2;
+    const z = rack.footprint.minZ - 0.12;
+    const top = WAREHOUSE_3D_ENVIRONMENT.rackHeight + 0.34;
+    signage.push(box(`aisle-sign-post-${index}`, "aisle-sign", [x, top / 2, z], [0.035, top, 0.035]));
+    signage.push(box(`aisle-sign-panel-${index}`, "aisle-sign", [x, top, z], [0.3, 0.16, 0.02]));
+    index += 1;
+  }
+
+  return signage;
+}
+
+/** Deterministic staged pallets along the building envelope; never on a route. */
+function buildFloorProps(transform: Warehouse3DTransform): WarehousePropVisual[] {
+  const padding = WAREHOUSE_3D_ENVIRONMENT.floorPadding;
+  const minX = (transform.minX - transform.centerX) * transform.visualScale - padding;
+  const maxX = (transform.maxX - transform.centerX) * transform.visualScale + padding;
+  const minZ = (transform.minY - transform.centerY) * transform.visualScale - padding;
+  const props: WarehousePropVisual[] = [];
+
+  [0.12, 0.28, 0.46, 0.72, 0.88].forEach((ratio, index) => {
+    const x = minX + (maxX - minX) * ratio;
+    const z = minZ + 0.4;
+    const seed = stableHash(`floor-prop:${index}`);
+    props.push({
+      ...box(`floor-pallet-${index}`, "pallet", [x, 0.03, z], [0.42, 0.06, 0.42]),
+      kind: "pallet",
+      minimumDetail: "overview",
+      rackId: "staging",
+    });
+    const stack = 0.16 + (seed % 3) * 0.07;
+    props.push({
+      ...box(`floor-carton-${index}`, "carton", [x, 0.06 + stack / 2, z], [0.34, stack, 0.34]),
+      kind: "carton",
+      minimumDetail: "overview",
+      rackId: "staging",
+    });
+  });
+
+  return props;
 }
 
 /**
@@ -380,10 +454,13 @@ export function buildWarehouse3DEnvironment(
 
   sourceRects.forEach((rect, aisleIndex) => {
     const aisleGap = graph.spatialLayout?.localAisleSpacing ?? rect.width / 2;
-    const rackWidth = (rect.width - aisleGap) / 2;
+    const centerX = rect.x + rect.width / 2;
+    // Runs sit outside the walkable aisle band, so the operator stands in a
+    // clear aisle beside the racking rather than inside it.
+    const runDepth = (rect.width - aisleGap) / 2;
     const rowRects = [
-      { x: rect.x, y: rect.y, width: rackWidth, height: rect.height },
-      { x: rect.x + rect.width - rackWidth, y: rect.y, width: rackWidth, height: rect.height },
+      { x: centerX - aisleGap / 2 - runDepth, y: rect.y, width: runDepth, height: rect.height },
+      { x: centerX + aisleGap / 2, y: rect.y, width: runDepth, height: rect.height },
     ];
     rowRects.forEach((rowRect, rowIndex) => {
       const rackId = `rack-${aisleIndex}-${rowIndex}`;
@@ -393,11 +470,13 @@ export function buildWarehouse3DEnvironment(
     });
   });
 
+  props.push(...buildFloorProps(transform));
+
   return {
     racks,
     props,
     aisles: aisleRects.map((rect, index) => buildAisleVisual(`lane-${index}`, rect, transform)),
-    boundary: buildBoundary(transform),
+    boundary: { ...buildBoundary(transform), signage: buildSignage(racks) },
   };
 }
 

@@ -118,10 +118,20 @@ describe("warehouse3dEnvironment", () => {
         * WAREHOUSE_3D_ENVIRONMENT.shelfLevels.length
         * 2,
     );
-    for (const prop of workerEnvironment.props) {
+    const stored = workerEnvironment.props.filter((prop) => prop.rackId !== "staging");
+    const staged = workerEnvironment.props.filter((prop) => prop.rackId === "staging");
+
+    for (const prop of stored) {
       const rack = workerEnvironment.racks.find(({ id }) => id === prop.rackId);
       expect(rack).toBeDefined();
       expectBoxInsideFootprint(prop, rack!.footprint);
+    }
+    // Staged floor loads are decorative envelope props: on the deck, never in a rack.
+    expect(staged.length).toBeGreaterThan(0);
+    for (const prop of staged) {
+      expect(workerEnvironment.racks.some(({ id }) => id === prop.rackId)).toBe(false);
+      expect(prop.center[1]).toBeGreaterThan(0);
+      expect(prop.center[1]).toBeLessThan(WAREHOUSE_3D_ENVIRONMENT.shelfLevels[0]);
     }
   });
 

@@ -15,9 +15,12 @@ import {
   createWarehouseServiceCompletionVisual,
   createWarehouseServiceProgressRing,
   getWarehouseLocationVisualState,
+  getWarehouseStoryCameraFocus,
   getWarehouseWorkerCountingGesture,
   SERVICE_COMPLETION_PULSE_SECONDS,
   SERVICE_PROGRESS_SEGMENTS,
+  STORY_CAMERA_ENTRY_SECONDS,
+  type WarehouseStoryCameraOptions,
 } from "./warehouse3dServiceVisual";
 
 const targetIds: NodeId[] = ["loc-A", "loc-B", "loc-C", "loc-D"];
@@ -276,5 +279,88 @@ describe("service completion pulse", () => {
     expect(timeline.totalDurationSeconds).toBe(
       timeline.walkingDurationSeconds + timeline.serviceDurationSeconds,
     );
+  });
+});
+
+describe("story camera policy", () => {
+  const explore = { viewMode: "explore" as const, suppressedLocationId: null };
+  const compare = { viewMode: "compare" as const, suppressedLocationId: null };
+  const focusAt = (
+    timeSeconds: number,
+    options: WarehouseStoryCameraOptions = explore,
+  ) => getWarehouseStoryCameraFocus(
+    timeline,
+    snapshotAt(timeSeconds),
+    transform,
+    coordinates,
+    options,
+  );
+  const midpoint = firstService.startTimeSeconds + firstService.durationSeconds / 2;
+
+  test("never frames a service event outside Explore mode", () => {
+    expect(focusAt(midpoint, compare)).toBeNull();
+    expect(focusAt(firstService.endTimeSeconds + 0.2, compare)).toBeNull();
+    expect(focusAt(midpoint)).not.toBeNull();
+  });
+
+  test("leaves travel under the viewer's contextual camera", () => {
+    expect(focusAt(1)).toBeNull();
+    expect(focusAt(firstService.startTimeSeconds - 0.01)).toBeNull();
+  });
+
+  test("blends in over the entry window and then holds the shot", () => {
+    const entry = focusAt(firstService.startTimeSeconds + STORY_CAMERA_ENTRY_SECONDS / 2);
+    const held = focusAt(midpoint);
+
+    expect(entry?.phase).toBe("entering");
+    expect(entry?.blend).toBeCloseTo(0.5);
+    expect(held?.phase).toBe("holding");
+    expect(held?.blend).toBe(1);
+    expect(held?.locationId).toBe(firstService.locationId);
+    expect([held?.point.x, held?.point.z].every(Number.isFinite)).toBe(true);
+  });
+
+  test("retreats across the existing completion window instead of cutting", () => {
+    const leaving = focusAt(firstService.endTimeSeconds + 0.2);
+    const later = focusAt(firstService.endTimeSeconds + SERVICE_COMPLETION_PULSE_SECONDS - 0.05);
+
+    expect(leaving?.phase).toBe("leaving");
+    expect(leaving?.locationId).toBe(firstService.locationId);
+    expect(leaving!.blend).toBeGreaterThan(later!.blend);
+    expect(focusAt(firstService.endTimeSeconds + SERVICE_COMPLETION_PULSE_SECONDS + 0.5)).toBeNull();
+  });
+
+  test("hands the camera to the viewer for the event they took over", () => {
+    const suppressed = {
+      viewMode: "explore" as const,
+      suppressedLocationId: firstService.locationId,
+    };
+
+    expect(focusAt(midpoint, suppressed)).toBeNull();
+    expect(focusAt(firstService.endTimeSeconds + 0.2, suppressed)).toBeNull();
+    // A different service event is a fresh story; suppression does not carry over.
+    const nextService = servicePhases[1];
+    const nextMidpoint = nextService.startTimeSeconds + nextService.durationSeconds / 2;
+    expect(focusAt(nextMidpoint, suppressed)?.locationId).toBe(nextService.locationId);
+  });
+
+  test("seeking lands on the correct framing with no stale shot", () => {
+    const before = focusAt(firstService.startTimeSeconds - 2);
+    const inside = focusAt(midpoint);
+    const backOut = focusAt(firstService.startTimeSeconds - 2);
+    const reset = focusAt(0);
+
+    expect(before).toBeNull();
+    expect(inside).not.toBeNull();
+    expect(backOut).toBeNull();
+    expect(reset).toBeNull();
+  });
+
+  test("is a pure function, so a remounted canvas derives the same shot", () => {
+    const first = focusAt(midpoint);
+    const second = focusAt(midpoint);
+
+    expect(first).toEqual(second);
+    expect(focusAt(timeline.totalDurationSeconds)).toBeNull();
   });
 });

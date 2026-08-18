@@ -10,9 +10,11 @@ import { buildRouteTraversal } from "../domain/routeTraversal";
 import { twoOptRoute } from "../domain/twoOpt";
 import type { NodeId, RouteComputation, RouteTimeline, WarehouseGraph } from "../domain/types";
 import { LanguageProvider } from "../i18n/LanguageContext";
-import { OPT_OFFSET } from "../ui/svgPoints";
+import { compareRoutes } from "../ui/routeComparison";
+import { NN_OFFSET, OPT_OFFSET } from "../ui/svgPoints";
 import {
   getSharedComparisonDuration,
+  getSharedComparisonSavings,
   getSharedComparisonSnapshots,
 } from "../ui/sharedSimulationComparison";
 import {
@@ -73,7 +75,7 @@ function linearTimeline(totalDurationSeconds: number): RouteTimeline {
   };
 }
 
-function setupComparison(language: "ko" | "en" = "en") {
+function setupComparison(language: "ko" | "en" = "en", view: "compare" | "explore" = "compare") {
   const targetIds = ["loc-A", "loc-B", "loc-C", "loc-D"];
   const routeGraph: WarehouseGraph = {
     ...sampleWarehouse,
@@ -115,6 +117,10 @@ function setupComparison(language: "ko" | "en" = "en") {
       />
     </LanguageProvider>,
   );
+
+  if (view === "compare") {
+    fireEvent.click(screen.getByRole("button", { name: language === "ko" ? "비교" : "Compare" }));
+  }
 
   return { ...rendered, worker, recommended, workerTimeline, recommendedTimeline };
 }
@@ -179,7 +185,7 @@ describe("RouteSimulationComparison", () => {
     const { container, workerTimeline, recommendedTimeline } = setupComparison();
     const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
 
-    expect(screen.getByRole("heading", { name: "Worker vs recommended route replay" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Cycle Count Digital Twin" })).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Play" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: /^Reset$/ })).toHaveLength(1);
     expect(seek.value).toBe("0");
@@ -192,8 +198,10 @@ describe("RouteSimulationComparison", () => {
     ));
     expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(2);
     expect(container.querySelectorAll(".route-simulation-viewport")).toHaveLength(2);
-    expect(container.querySelectorAll("svg")).toHaveLength(2);
-    expect(container.querySelectorAll('[data-testid="simulation-marker"]')).toHaveLength(2);
+    // One warehouse projection per viewport; toolbar glyphs and the minimap are not viewports.
+    expect(container.querySelectorAll("[data-simulation-viewport] svg")).toHaveLength(2);
+    expect(container.querySelectorAll('[data-simulation-viewport] [data-testid="simulation-marker"]'))
+      .toHaveLength(2);
     expect(screen.getAllByText("Ready")).toHaveLength(2);
     expect(screen.queryByText("Route to replay")).toBeNull();
     expect(container.querySelectorAll('input[type="radio"]')).toHaveLength(0);
@@ -201,7 +209,7 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getByRole("button", { name: "2D" }).getAttribute("aria-pressed")).toBe("false");
     expect(screen.getByRole("group", { name: "View" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Compare" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("group", { name: "Camera" })).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "Camera tools" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Overview" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "Reset camera" })).toBeTruthy();
   });
@@ -240,23 +248,28 @@ describe("RouteSimulationComparison", () => {
     expect(frames.pendingCount()).toBe(1);
   });
 
-  test("hides 3D-only controls in 2D and restores Explore without resetting playback state", () => {
+  test("drops 3D-only tooling in 2D while keeping the view and playback state", () => {
     const { container } = setupComparison();
     const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
     fireEvent.change(seek, { target: { value: 30 } });
     fireEvent.click(screen.getByRole("button", { name: "10×" }));
     fireEvent.click(screen.getByRole("button", { name: "Explore" }));
     expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(1);
+    expect(screen.getByRole("navigation", { name: "Camera tools" })).toBeTruthy();
+    expect(container.querySelector(".twin__minimap")).not.toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "2D" }));
-    expect(screen.queryByRole("group", { name: "View" })).toBeNull();
-    expect(screen.queryByRole("group", { name: "Camera" })).toBeNull();
-    expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(2);
+    // The camera rail and minimap belong to the 3D stage only.
+    expect(screen.queryByRole("navigation", { name: "Camera tools" })).toBeNull();
+    expect(container.querySelector(".twin__minimap")).toBeNull();
+    // The chosen view and the clock survive the renderer switch.
+    expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Explore" }).getAttribute("aria-pressed")).toBe("true");
     expect(seek.value).toBe("30");
     expect(screen.getByRole("button", { name: "10×" }).getAttribute("aria-pressed")).toBe("true");
 
     fireEvent.click(screen.getByRole("button", { name: "3D" }));
-    expect(screen.getByRole("button", { name: "Explore" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("navigation", { name: "Camera tools" })).toBeTruthy();
     expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(1);
     expect(seek.value).toBe("30");
   });
@@ -329,8 +342,9 @@ describe("RouteSimulationComparison", () => {
     expect(frames.pendingCount()).toBe(1);
     const statusBefore = [...container.querySelectorAll(".route-simulation-viewport__status")]
       .map((status) => status.textContent);
-    const markersBefore = [...container.querySelectorAll('[data-testid="simulation-marker"]')]
-      .map((marker) => marker.getAttribute("transform"));
+    const markersBefore = [...container.querySelectorAll(
+      '[data-simulation-viewport] [data-testid="simulation-marker"]',
+    )].map((marker) => marker.getAttribute("transform"));
 
     fireEvent.click(screen.getByRole("button", { name: "2D" }));
     expect(seek.value).toBe(String(sharedTime));
@@ -338,8 +352,9 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getByRole("button", { name: "5×" }).getAttribute("aria-pressed")).toBe("true");
     expect([...container.querySelectorAll(".route-simulation-viewport__status")]
       .map((status) => status.textContent)).toEqual(statusBefore);
-    expect([...container.querySelectorAll('[data-testid="simulation-marker"]')]
-      .map((marker) => marker.getAttribute("transform"))).toEqual(markersBefore);
+    expect([...container.querySelectorAll(
+      '[data-simulation-viewport] [data-testid="simulation-marker"]',
+    )].map((marker) => marker.getAttribute("transform"))).toEqual(markersBefore);
 
     fireEvent.click(screen.getByRole("button", { name: "3D" }));
     expect(seek.value).toBe(String(sharedTime));
@@ -476,12 +491,15 @@ describe("RouteSimulationComparison", () => {
 
   test("shows route-specific duration and KPI truth without changing it at 10x", () => {
     const { workerTimeline, recommendedTimeline } = setupComparison();
-    expect(screen.getAllByText("Travel")).toHaveLength(2);
-    expect(screen.getAllByText("Counting")).toHaveLength(2);
-    expect(screen.getAllByText("Total")).toHaveLength(2);
+    // One telemetry column now owns these figures instead of two duplicated cards.
+    expect(screen.getAllByText("Travel")).toHaveLength(1);
+    expect(screen.getAllByText("Counting")).toHaveLength(1);
+    expect(screen.getAllByText("Total")).toHaveLength(1);
     expect(screen.getAllByText("Counting times use deterministic synthetic demo assumptions."))
-      .toHaveLength(2);
-    expect(screen.getAllByText("0 / 4")).toHaveLength(2);
+      .toHaveLength(1);
+    expect(screen.getAllByText("0 / 4")).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "Route summary" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Recommendation comparison" })).toBeTruthy();
     expect(workerTimeline.serviceDurationSeconds).toBe(recommendedTimeline.serviceDurationSeconds);
     const physicalTotals = [
       workerTimeline.totalDurationSeconds,
@@ -507,15 +525,16 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getByRole("button", { name: "재생" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "창고 보기" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "보기 방식" })).toBeTruthy();
-    expect(screen.getByRole("group", { name: "카메라" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "카메라 초기화" })).toBeTruthy();
-    expect(screen.getAllByText("이동")).toHaveLength(2);
-    expect(screen.getAllByText("재고 조사")).toHaveLength(2);
-    expect(screen.getAllByText("총 운영 시간")).toHaveLength(2);
+    expect(screen.getAllByText("이동")).toHaveLength(1);
+    expect(screen.getAllByText("재고 조사")).toHaveLength(1);
+    expect(screen.getAllByText("총 운영 시간")).toHaveLength(1);
     expect(screen.getAllByText("재고 조사 시간은 결정론적 합성 데모 가정을 사용합니다."))
-      .toHaveLength(2);
+      .toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "경로 요약" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "탐색" }));
     expect(screen.getByRole("group", { name: "탐색할 경로" })).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "카메라 도구" })).toBeTruthy();
   });
 });
 
@@ -538,7 +557,7 @@ describe("counting HUD", () => {
     expect(hud?.textContent).toContain("Travelling");
     expect(hud?.getAttribute("data-service-location")).toBeNull();
     expect(screen.queryAllByRole("progressbar", { name: "Counting progress" })).toHaveLength(0);
-    expect(screen.getAllByText("0 / 4")).toHaveLength(2);
+    expect(screen.getAllByText("0 / 4")).toHaveLength(1);
   });
 
   test("shows location, service class, progress, elapsed, and remaining while counting", () => {
@@ -565,7 +584,7 @@ describe("counting HUD", () => {
     expect(progressBar.max).toBe(1);
     expect(progressBar.getAttribute("aria-label")).toBe("Counting progress");
     // Service progress is not route progress: the location is not completed yet.
-    expect(screen.getAllByText("0 / 4").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("0 / 4")).toHaveLength(1);
   });
 
   test("counting visuals follow forward and backward seeks with no stale state", () => {
@@ -651,5 +670,157 @@ describe("counting HUD", () => {
     expect(hud?.textContent).toContain("\ub0a8\uc740 \uc2dc\uac04");
     expect(screen.getAllByRole("progressbar", { name: "\uc7ac\uace0 \uc870\uc0ac \uc9c4\ud589\ub960" }).length)
       .toBeGreaterThan(0);
+  });
+});
+
+describe("counting HUD emphasis", () => {
+  test("gains visual weight when counting starts and stays quiet while travelling", () => {
+    const { container, workerTimeline } = setupComparison();
+    const service = workerTimeline.phases.find(
+      (phase) => phase.kind === "service" && phase.durationSeconds > 0,
+    );
+    if (!service || service.kind !== "service") throw new Error("Expected service phase");
+    const hud = () => container.querySelector(
+      '[data-simulation-viewport="worker"] [data-simulation-activity]',
+    );
+
+    expect(hud()?.className).toContain("route-simulation-viewport__hud--travel");
+    expect(hud()?.className).not.toContain("route-simulation-viewport__hud--service");
+
+    fireEvent.change(screen.getByLabelText("Replay position"), {
+      target: { value: service.startTimeSeconds + service.durationSeconds / 2 },
+    });
+
+    expect(hud()?.className).toContain("route-simulation-viewport__hud--service");
+    // The HUD is an overlay on the stage, so gaining weight cannot move the viewport.
+    expect(hud()?.closest(".route-simulation-viewport__stage")).not.toBeNull();
+    expect(hud()?.getAttribute("aria-live")).toBe("off");
+  });
+
+  test("reports the same counting truth in Compare and Explore", () => {
+    const { container, workerTimeline } = setupComparison();
+    const service = workerTimeline.phases.find(
+      (phase) => phase.kind === "service" && phase.durationSeconds > 0,
+    );
+    if (!service || service.kind !== "service") throw new Error("Expected service phase");
+    const midpoint = service.startTimeSeconds + service.durationSeconds / 2;
+    fireEvent.change(screen.getByLabelText("Replay position"), { target: { value: midpoint } });
+
+    const workerHud = () => container.querySelector(
+      '[data-simulation-viewport="worker"] [data-simulation-activity]',
+    );
+    const compareLocation = workerHud()?.getAttribute("data-service-location");
+    const compareProgress = workerHud()?.getAttribute("data-service-progress");
+
+    fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+
+    expect(workerHud()?.getAttribute("data-service-location")).toBe(compareLocation);
+    expect(workerHud()?.getAttribute("data-service-progress")).toBe(compareProgress);
+    expect(workerHud()?.className).toContain("route-simulation-viewport__hud--service");
+  });
+});
+
+describe("digital twin shell", () => {
+  test("frames the 3D stage with telemetry, a camera rail, and a timeline", () => {
+    const { container } = setupComparison("en", "explore");
+
+    expect(container.querySelector(".twin__bar")).not.toBeNull();
+    expect(container.querySelector(".twin__ops")).not.toBeNull();
+    expect(container.querySelector(".twin__stage")).not.toBeNull();
+    expect(container.querySelector(".twin__timeline")).not.toBeNull();
+    expect(screen.getByRole("navigation", { name: "Camera tools" })).toBeTruthy();
+    // Explore is the default hero view: one stage, not a pair of cards.
+    expect(container.querySelectorAll("[data-simulation-viewport]")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Explore" }).getAttribute("aria-pressed"))
+      .toBe("true");
+  });
+
+  test("reports operations telemetry straight from the existing timelines", () => {
+    const { workerTimeline, recommendedTimeline, worker, recommended } =
+      setupComparison("en", "explore");
+    const clock = (seconds: number) => {
+      const rounded = Math.round(seconds);
+      return `${Math.floor(rounded / 60)}:${String(rounded % 60).padStart(2, "0")}`;
+    };
+    const expected = compareRoutes(worker, recommended);
+    const savings = getSharedComparisonSavings(workerTimeline, recommendedTimeline);
+    const panel = document.querySelector(".ops-panel") as HTMLElement;
+
+    expect(panel.textContent).toContain(clock(workerTimeline.walkingDurationSeconds));
+    expect(panel.textContent).toContain(clock(workerTimeline.serviceDurationSeconds));
+    expect(panel.textContent).toContain(clock(workerTimeline.totalDurationSeconds));
+    expect(panel.textContent).toContain(clock(recommendedTimeline.totalDurationSeconds));
+    expect(panel.textContent).toContain(`${expected.improvementPct.toFixed(1)}%`);
+    expect(panel.textContent).toContain(clock(savings.walkingSecondsSaved));
+    // The controlled-comparison statement stays with the comparison it describes.
+    expect(panel.textContent).toContain("Only the route sequence differs.");
+  });
+
+  test("follows the explored route in the telemetry column", () => {
+    const { workerTimeline, recommendedTimeline } = setupComparison("en", "explore");
+    const panelText = () => (document.querySelector(".ops-panel") as HTMLElement).textContent ?? "";
+
+    expect(panelText()).toContain("Worker route");
+    fireEvent.click(screen.getByRole("button", { name: "System recommended route" }));
+    // Both routes carry identical count workload; only the walking differs.
+    expect(workerTimeline.serviceDurationSeconds)
+      .toBe(recommendedTimeline.serviceDurationSeconds);
+    expect(panelText()).toContain("System recommended route");
+  });
+
+  test("exposes every camera action as a labelled control", () => {
+    setupComparison("en", "explore");
+
+    for (const label of ["Overview", "Top", "Aisle", "Worker focus", "Reset camera"]) {
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+    }
+    const overview = screen.getByRole("button", { name: "Overview" });
+    const aisle = screen.getByRole("button", { name: "Aisle" });
+    expect(overview.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(aisle);
+    expect(aisle.getAttribute("aria-pressed")).toBe("true");
+    expect(overview.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  test("derives the minimap from the same projection as the stage", () => {
+    const { container, workerTimeline } = setupComparison("en", "explore");
+    const service = workerTimeline.phases.find(
+      (phase) => phase.kind === "service" && phase.durationSeconds > 0,
+    );
+    if (!service || service.kind !== "service") throw new Error("Expected service phase");
+    fireEvent.change(screen.getByLabelText("Replay position"), {
+      target: { value: service.startTimeSeconds + service.durationSeconds / 2 },
+    });
+
+    const minimap = container.querySelector(".twin__minimap");
+    const stageMarker = container.querySelector(
+      '[data-simulation-viewport] [data-testid="simulation-marker"]',
+    );
+    const minimapMarker = minimap?.querySelector('[data-testid="simulation-marker"]');
+
+    const parse = (element: Element | null | undefined) => {
+      const match = /translate\(([-\d.]+) ([-\d.]+)\)/.exec(element?.getAttribute("transform") ?? "");
+      if (!match) throw new Error("Expected a translated marker");
+      return { x: Number(match[1]), y: Number(match[2]) };
+    };
+
+    expect(minimapMarker).not.toBeNull();
+    // Same snapshot and same SVG projection; only the cosmetic route offset differs.
+    const stagePoint = parse(stageMarker);
+    const minimapPoint = parse(minimapMarker);
+    expect(minimapPoint.x - stagePoint.x).toBeCloseTo(-NN_OFFSET.x);
+    expect(minimapPoint.y - stagePoint.y).toBeCloseTo(-NN_OFFSET.y);
+  });
+
+  test("keeps the timeline semantic and localized", () => {
+    setupComparison("ko", "explore");
+
+    expect(screen.getByRole("heading", { name: "순환 재고 조사 디지털 트윈" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "재생" })).toBeTruthy();
+    expect(screen.getByLabelText("재생 위치")).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "카메라 도구" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "경로 요약" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "작업 상태" })).toBeTruthy();
   });
 });

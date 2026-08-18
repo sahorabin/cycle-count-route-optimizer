@@ -1,6 +1,6 @@
 import { Canvas, useThree } from "@react-three/fiber";
-import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { DoubleSide, InstancedMesh, Object3D, OrthographicCamera, Quaternion, Vector3 } from "three";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { InstancedMesh, Object3D, OrthographicCamera, Quaternion, Vector3 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { NodeId, RouteTimeline, WarehouseGraph } from "../domain/types";
 import type { SimulationSnapshot } from "../simulation/types";
@@ -9,16 +9,21 @@ import {
   createWarehouseActiveServiceVisual,
   createWarehouseServiceCompletionVisual,
   getWarehouseLocationVisualState,
+  getWarehouseStoryCameraFocus,
   getWarehouseWorkerCountingGesture,
   type WarehouseActiveServiceVisual,
   type WarehouseCountingGesture,
   type WarehouseServiceCompletionVisual,
+  type WarehouseStoryCameraFocus,
 } from "../ui/warehouse3dServiceVisual";
 import {
   clampWarehouseCameraZoom,
   createWarehouseCameraChannel,
   createWarehouseCameraPresetView,
-  getWarehouseLocationDetailLevel,
+  createWarehouseStoryCameraView,
+  getWarehouseCameraBaseZoom,
+  getWarehouseDetailLevelForZoomRatio,
+  getWarehouseZoomBucket,
   shouldRenderWarehouseLocation,
   WAREHOUSE_CAMERA_LIMITS,
   type WarehouseCameraChannel,
@@ -35,6 +40,7 @@ import {
   type WarehouseEnvironmentBoxVisual,
 } from "../ui/warehouse3dEnvironment";
 import {
+  buildOperatorCoordinateLookup,
   createWarehouse3DTransform,
   projectDisplayPointToWarehouse3D,
   projectNodeToWarehouse3D,
@@ -43,12 +49,18 @@ import {
 } from "../ui/warehouse3dProjection";
 import {
   buildWarehouse3DRouteVisualSegments,
+  WAREHOUSE_3D_MATERIALS,
   WAREHOUSE_3D_VISUALS,
   type Warehouse3DRouteVisualSegment,
 } from "../ui/warehouse3dVisuals";
 import {
   createWarehouseWorkerPose,
+  createWarehouseWorkerScanCue,
   createWarehouseWorkerVisual,
+  getWarehouseWorkerFigureScale,
+  WAREHOUSE_WORKER_COLORS,
+  WAREHOUSE_WORKER_DEPTH_POLICY,
+  type WarehouseWorkerScanCue,
   type WarehouseWorkerVisualPart,
 } from "../ui/warehouse3dWorker";
 import type { ReplayRouteMode } from "./RouteSimulationReplay";
@@ -64,13 +76,14 @@ interface Warehouse3DViewportProps {
   cameraResetRequest?: number;
   cameraChannel?: WarehouseCameraChannel;
   cameraAuthority?: boolean;
+  viewMode?: "compare" | "explore";
 }
 
+/** Deeper, lower-chroma identity hues: still unmistakable, no longer neon. */
 const ROUTE_COLORS: Record<ReplayRouteMode, string> = {
-  worker: "#2563eb",
-  recommended: "#0f9f75",
+  worker: "#5a92d8",
+  recommended: "#48b391",
 };
-const TARGET_WORLD_SPAN = 20;
 
 interface InteractiveWarehouseCameraProps {
   preset: WarehouseCameraPreset;
@@ -79,7 +92,10 @@ interface InteractiveWarehouseCameraProps {
   authority: boolean;
   instanceId: string;
   workerPoint: { readonly x: number; readonly y: number; readonly z: number };
-  onDetailLevelChange: (level: WarehouseLocationDetailLevel) => void;
+  onDetailLevelChange?: (level: WarehouseLocationDetailLevel) => void;
+  onZoomBucketChange?: (bucket: number) => void;
+  storyFocus?: WarehouseStoryCameraFocus | null;
+  onUserCameraInteraction?: () => void;
 }
 
 export function InteractiveWarehouseCamera({
@@ -90,6 +106,9 @@ export function InteractiveWarehouseCamera({
   instanceId,
   workerPoint,
   onDetailLevelChange,
+  onZoomBucketChange,
+  storyFocus = null,
+  onUserCameraInteraction,
 }: InteractiveWarehouseCameraProps) {
   const { camera, gl, size, invalidate } = useThree();
   const controlsRef = useRef<OrbitControls | null>(null);
@@ -99,10 +118,11 @@ export function InteractiveWarehouseCamera({
   const latestWorkerPointRef = useRef(workerPoint);
   latestPresetRef.current = preset;
   latestWorkerPointRef.current = workerPoint;
-  const baseZoom = Math.max(
-    1,
-    Math.min(size.width / (TARGET_WORLD_SPAN * 1.35), size.height / TARGET_WORLD_SPAN),
-  );
+  const baseZoom = getWarehouseCameraBaseZoom(size.width, size.height);
+  // Renderer-only bookkeeping: whether the automatic shot currently owns the
+  // camera. A user gesture drops it, which is what stops the story from
+  // snapping the view back against their intent.
+  const storyOwnsCameraRef = useRef(false);
 
   useLayoutEffect(() => {
     if (!(camera instanceof OrthographicCamera)) return;
@@ -122,7 +142,9 @@ export function InteractiveWarehouseCamera({
 
     const updateDetailLevel = () => {
       if (!owner.isActive()) return;
-      onDetailLevelChange(getWarehouseLocationDetailLevel(camera.zoom, baseZoom));
+      const bucket = getWarehouseZoomBucket(camera.zoom, baseZoom);
+      onDetailLevelChange?.(getWarehouseDetailLevelForZoomRatio(bucket));
+      onZoomBucketChange?.(bucket);
     };
     const applyView = (view: WarehouseCameraView) => {
       if (!owner.isActive()) return;
@@ -145,6 +167,8 @@ export function InteractiveWarehouseCamera({
 
     const publishInteraction = () => {
       if (!owner.isActive() || applyingViewRef.current) return;
+      storyOwnsCameraRef.current = false;
+      onUserCameraInteraction?.();
       const previousTarget = controls.target.clone();
       controls.target.set(
         Math.min(WAREHOUSE_CAMERA_LIMITS.targetExtent, Math.max(-WAREHOUSE_CAMERA_LIMITS.targetExtent, controls.target.x)),
@@ -175,7 +199,47 @@ export function InteractiveWarehouseCamera({
       if (controlsRef.current === controls) controlsRef.current = null;
       if (applyViewRef.current === applyView) applyViewRef.current = null;
     };
-  }, [baseZoom, camera, channel, gl.domElement, instanceId, invalidate, onDetailLevelChange]);
+  }, [
+    baseZoom,
+    camera,
+    channel,
+    gl.domElement,
+    instanceId,
+    invalidate,
+    onDetailLevelChange,
+    onUserCameraInteraction,
+    onZoomBucketChange,
+  ]);
+
+  // Automatic service framing. It applies an existing preset view blended toward
+  // the service shot by a blend the simulation already decided, and hands the
+  // camera back only when a story it actually owned ends.
+  useLayoutEffect(() => {
+    const applyView = applyViewRef.current;
+    if (!authority || !applyView) return;
+
+    const contextualView = () => createWarehouseCameraPresetView(
+      latestPresetRef.current,
+      baseZoom,
+      latestWorkerPointRef.current,
+    );
+
+    if (storyFocus) {
+      applyView(createWarehouseStoryCameraView(
+        contextualView(),
+        storyFocus.point,
+        storyFocus.blend,
+        baseZoom,
+      ));
+      storyOwnsCameraRef.current = true;
+      return;
+    }
+
+    if (storyOwnsCameraRef.current) {
+      storyOwnsCameraRef.current = false;
+      applyView(contextualView());
+    }
+  }, [authority, baseZoom, storyFocus]);
 
   useLayoutEffect(() => {
     if (!authority || !controlsRef.current || !applyViewRef.current) return;
@@ -199,6 +263,8 @@ interface InstancedEnvironmentBoxesProps {
   opacity?: number;
   emissive?: string;
   emissiveIntensity?: number;
+  castShadow?: boolean;
+  receiveShadow?: boolean;
 }
 
 function InstancedEnvironmentBoxes({
@@ -209,6 +275,8 @@ function InstancedEnvironmentBoxes({
   opacity = 1,
   emissive,
   emissiveIntensity = 0,
+  castShadow = false,
+  receiveShadow = false,
 }: InstancedEnvironmentBoxesProps) {
   const meshRef = useRef<InstancedMesh>(null);
   const { invalidate } = useThree();
@@ -231,7 +299,12 @@ function InstancedEnvironmentBoxes({
   if (visuals.length === 0) return null;
 
   return (
-    <instancedMesh ref={meshRef} args={[undefined, undefined, visuals.length]}>
+    <instancedMesh
+      ref={meshRef}
+      args={[undefined, undefined, visuals.length]}
+      castShadow={castShadow}
+      receiveShadow={receiveShadow}
+    >
       <boxGeometry args={[1, 1, 1]} />
       <meshStandardMaterial
         color={color}
@@ -264,12 +337,21 @@ const WarehouseFloor = memo(function WarehouseFloor({
 
   return (
     <>
-      <InstancedEnvironmentBoxes visuals={[floor]} color="#dce3e6" roughness={1} />
-      <InstancedEnvironmentBoxes visuals={localAisles} color="#e9eef0" roughness={1} />
-      <InstancedEnvironmentBoxes visuals={internalCrossAisles} color="#dfe9eb" roughness={1} />
-      <InstancedEnvironmentBoxes visuals={blockSeparations} color="#d5e2e5" roughness={1} />
-      <InstancedEnvironmentBoxes visuals={aisleMarkings} color="#d1a93c" roughness={0.85} />
-      <InstancedEnvironmentBoxes visuals={perimeterMarkings} color="#c08b2c" roughness={0.85} />
+      <InstancedEnvironmentBoxes visuals={[floor]} {...WAREHOUSE_3D_MATERIALS.floor} receiveShadow />
+      <InstancedEnvironmentBoxes visuals={localAisles} {...WAREHOUSE_3D_MATERIALS.localAisle} />
+      <InstancedEnvironmentBoxes
+        visuals={internalCrossAisles}
+        {...WAREHOUSE_3D_MATERIALS.internalCrossAisle}
+      />
+      <InstancedEnvironmentBoxes
+        visuals={blockSeparations}
+        {...WAREHOUSE_3D_MATERIALS.blockSeparation}
+      />
+      <InstancedEnvironmentBoxes visuals={aisleMarkings} {...WAREHOUSE_3D_MATERIALS.aisleMarking} />
+      <InstancedEnvironmentBoxes
+        visuals={perimeterMarkings}
+        {...WAREHOUSE_3D_MATERIALS.perimeterMarking}
+      />
     </>
   );
 });
@@ -281,22 +363,19 @@ const WarehouseShell = memo(function WarehouseShell({
     <>
       <InstancedEnvironmentBoxes
         visuals={environment.boundary.walls}
-        color="#c7d1d6"
-        roughness={0.94}
-        opacity={0.46}
+        {...WAREHOUSE_3D_MATERIALS.wall}
       />
       <InstancedEnvironmentBoxes
         visuals={environment.boundary.columns}
-        color="#7f8b93"
-        roughness={0.82}
-        metalness={0.08}
+        {...WAREHOUSE_3D_MATERIALS.column}
       />
       <InstancedEnvironmentBoxes
         visuals={environment.boundary.overheadFixtures}
-        color="#e7eff0"
-        roughness={0.4}
-        emissive="#d9e8ea"
-        emissiveIntensity={0.55}
+        {...WAREHOUSE_3D_MATERIALS.overheadFixture}
+      />
+      <InstancedEnvironmentBoxes
+        visuals={environment.boundary.signage}
+        {...WAREHOUSE_3D_MATERIALS.aisleSign}
       />
     </>
   );
@@ -316,6 +395,7 @@ const WarehouseRacks = memo(function WarehouseRacks({
   const uprights = renderSet.rackMembers.filter((visual) => visual.kind === "rack-upright");
   const beams = renderSet.rackMembers.filter((visual) => visual.kind === "rack-beam");
   const shelves = renderSet.rackMembers.filter((visual) => visual.kind === "rack-shelf");
+  const guards = renderSet.rackMembers.filter((visual) => visual.kind === "rack-guard");
   const pallets = renderSet.storageProps.filter((visual) => visual.kind === "pallet");
   const cartons = renderSet.storageProps.filter((visual) => visual.kind === "carton");
 
@@ -323,30 +403,42 @@ const WarehouseRacks = memo(function WarehouseRacks({
     <>
       <InstancedEnvironmentBoxes
         visuals={uprights}
-        color="#66757e"
-        roughness={0.78}
-        metalness={0.16}
+        {...WAREHOUSE_3D_MATERIALS.rackUpright}
+        castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.rackUpright}
+        receiveShadow
       />
       <InstancedEnvironmentBoxes
         visuals={beams}
-        color="#7e8c94"
-        roughness={0.8}
-        metalness={0.12}
+        {...WAREHOUSE_3D_MATERIALS.rackBeam}
+        castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.rackBeam}
       />
       <InstancedEnvironmentBoxes
         visuals={shelves}
-        color="#aeb9be"
-        roughness={0.9}
-        opacity={0.76}
+        {...WAREHOUSE_3D_MATERIALS.rackShelf}
+        castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.rackShelf}
+        receiveShadow
       />
-      <InstancedEnvironmentBoxes visuals={pallets} color="#806f5a" roughness={1} />
-      <InstancedEnvironmentBoxes visuals={cartons} color="#a58d6c" roughness={0.96} />
+      <InstancedEnvironmentBoxes
+        visuals={guards}
+        {...WAREHOUSE_3D_MATERIALS.rackGuard}
+        castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.rackGuard}
+      />
+      <InstancedEnvironmentBoxes
+        visuals={pallets}
+        {...WAREHOUSE_3D_MATERIALS.pallet}
+        castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.pallet}
+      />
+      <InstancedEnvironmentBoxes
+        visuals={cartons}
+        {...WAREHOUSE_3D_MATERIALS.carton}
+        castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.carton}
+      />
     </>
   );
 });
 
 /** Counted locations step down to a neutral, low-priority cue so the active one dominates. */
-const COMPLETED_LOCATION_COLOR = "#8b9aa5";
+const COMPLETED_LOCATION_COLOR = WAREHOUSE_3D_MATERIALS.completedLocation;
 
 function CompletedLocationMarker({ color }: { color: string }) {
   return (
@@ -383,12 +475,12 @@ function DestinationMarker({ color, opacity, beaconScale }: {
         <ringGeometry args={[destination.ringInnerRadius, destination.ringOuterRadius, 20]} />
         <meshBasicMaterial color={color} transparent={opacity < 1} opacity={opacity} />
       </mesh>
-      <mesh position={[0, 0.64, 0]}>
+      <mesh position={[0, destination.stemY, 0]}>
         <cylinderGeometry args={[
           destination.stemRadius,
           destination.stemRadius,
           destination.stemHeight,
-          8,
+          6,
         ]} />
         <meshBasicMaterial color={color} transparent={opacity < 1} opacity={opacity} />
       </mesh>
@@ -441,8 +533,8 @@ function WarehouseLocations({
     if (state === "idle") {
       return [(
         <mesh key={id} position={[point.x, 0.08, point.z]}>
-          <sphereGeometry args={[0.065, 8, 6]} />
-          <meshStandardMaterial color="#b7c1c9" roughness={0.85} />
+          <sphereGeometry args={[0.05, 8, 6]} />
+          <meshStandardMaterial {...WAREHOUSE_3D_MATERIALS.unselectedLocation} />
         </mesh>
       )];
     }
@@ -469,59 +561,121 @@ function WarehouseLocations({
  * ring. Every value comes from the supplied descriptor -- nothing is timed,
  * measured, or recomputed here.
  */
-function ActiveServiceVisual({ visual, color }: {
+function ActiveServiceVisual({ visual, color, detailLevel, standPoint }: {
   visual: WarehouseActiveServiceVisual;
   color: string;
+  detailLevel: WarehouseLocationDetailLevel;
+  standPoint: { readonly x: number; readonly z: number };
 }) {
   const { position, pulse, ring } = visual;
+  const accent = WAREHOUSE_3D_MATERIALS.activeAccent;
+  // The frame faces the aisle the operator is standing in.
+  const facingYaw = Math.atan2(position.x - standPoint.x, position.z - standPoint.z);
+  const frame = { width: 0.52, height: 0.44, centerY: 0.95, thickness: 0.014 };
+  const edges: Array<{ id: string; position: [number, number, number]; size: [number, number, number] }> = [
+    {
+      id: "top",
+      position: [0, frame.centerY + frame.height / 2, 0],
+      size: [frame.width, frame.thickness, frame.thickness],
+    },
+    {
+      id: "bottom",
+      position: [0, frame.centerY - frame.height / 2, 0],
+      size: [frame.width, frame.thickness, frame.thickness],
+    },
+    {
+      id: "left",
+      position: [-frame.width / 2, frame.centerY, 0],
+      size: [frame.thickness, frame.height, frame.thickness],
+    },
+    {
+      id: "right",
+      position: [frame.width / 2, frame.centerY, 0],
+      size: [frame.thickness, frame.height, frame.thickness],
+    },
+  ];
 
   return (
-    <group position={[position.x, 0, position.z]}>
-      <mesh position={[0, 0.035, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={2}>
-        <ringGeometry args={[0.64, 0.74 + 0.06 * pulse, 32]} />
-        <meshBasicMaterial
-          color={color}
-          transparent
-          opacity={0.26 + 0.2 * pulse}
-          depthTest={false}
-          depthWrite={false}
-        />
-      </mesh>
-      <mesh position={[0, 0.85, 0]}>
-        <cylinderGeometry args={[0.34, 0.34, 1.7, 12, 1, true]} />
-        <meshBasicMaterial
-          color={color}
-          transparent
-          opacity={0.08 + 0.05 * pulse}
-          depthWrite={false}
-          side={DoubleSide}
-        />
-      </mesh>
-      {ring.segments.map((segment) => (
-        <mesh
-          key={segment.index}
-          position={[0, 0.06, 0]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          renderOrder={3}
-        >
-          <ringGeometry args={[
-            0.5,
-            segment.filled ? 0.61 : 0.57,
-            4,
-            1,
-            segment.startAngleRadians,
-            ring.segmentAngleRadians * 0.72,
-          ]} />
+    <>
+      {/* Bay frame on the rack face being counted. */}
+      <group position={[position.x, 0, position.z]} rotation={[0, facingYaw, 0]}>
+        {edges.map((edge) => (
+          <mesh key={edge.id} position={edge.position} renderOrder={3}>
+            <boxGeometry args={edge.size} />
+            <meshBasicMaterial
+              color={accent}
+              transparent
+              opacity={0.7 + 0.25 * pulse}
+              depthTest={false}
+              depthWrite={false}
+            />
+          </mesh>
+        ))}
+      </group>
+
+      {/* Operator standing position: floor marker plus service progress. */}
+      <group position={[standPoint.x, 0, standPoint.z]}>
+        <mesh position={[0, 0.035, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={2}>
+          <ringGeometry args={[0.34, 0.4 + 0.03 * pulse, 32]} />
           <meshBasicMaterial
-            color={segment.filled ? color : "#a7b3bc"}
+            color={accent}
             transparent
-            opacity={segment.filled ? 0.95 : 0.38}
+            opacity={0.24 + 0.18 * pulse}
             depthTest={false}
             depthWrite={false}
           />
         </mesh>
-      ))}
-    </group>
+        {detailLevel === "overview" ? (
+          <>
+            <mesh position={[0, 0.055, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={3}>
+              <ringGeometry args={[0.26, 0.31, 24]} />
+              <meshBasicMaterial
+                color={WAREHOUSE_3D_MATERIALS.progressTrack}
+                transparent
+                opacity={0.5}
+                depthTest={false}
+                depthWrite={false}
+              />
+            </mesh>
+            {ring.filledFraction > 0 ? (
+              <mesh position={[0, 0.06, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={3}>
+                <ringGeometry args={[0.26, 0.33, 24, 1, 0, ring.filledFraction * Math.PI * 2]} />
+                <meshBasicMaterial
+                  color={color}
+                  transparent
+                  opacity={0.95}
+                  depthTest={false}
+                  depthWrite={false}
+                />
+              </mesh>
+            ) : null}
+          </>
+        ) : ring.segments.map((segment) => (
+          <mesh
+            key={segment.index}
+            position={[0, 0.06, 0]}
+            rotation={[-Math.PI / 2, 0, 0]}
+            renderOrder={3}
+          >
+            <ringGeometry args={[
+              0.26,
+              segment.filled ? 0.33 : 0.305,
+              4,
+              1,
+              segment.startAngleRadians,
+              ring.segmentAngleRadians * 0.72,
+            ]} />
+            <meshBasicMaterial
+              color={segment.filled ? color : WAREHOUSE_3D_MATERIALS.progressTrack}
+              transparent
+              opacity={segment.filled ? 0.95 : 0.42}
+              depthTest={false}
+              depthWrite={false}
+            />
+          </mesh>
+        ))}
+      </group>
+    </>
   );
 }
 
@@ -530,7 +684,7 @@ function ServiceCompletionPulse({ visual, color }: {
   visual: WarehouseServiceCompletionVisual;
   color: string;
 }) {
-  const inner = 0.5 + 0.85 * (1 - visual.intensity);
+  const inner = 0.32 + 0.62 * (1 - visual.intensity);
 
   return (
     <mesh
@@ -538,7 +692,7 @@ function ServiceCompletionPulse({ visual, color }: {
       rotation={[-Math.PI / 2, 0, 0]}
       renderOrder={3}
     >
-      <ringGeometry args={[inner, inner + 0.09, 32]} />
+      <ringGeometry args={[inner, inner + 0.065, 32]} />
       <meshBasicMaterial
         color={color}
         transparent
@@ -559,17 +713,27 @@ function OfficeMarker({ graph, transform }: {
     [graph, transform],
   );
   return (
-    <mesh position={[office.x, 0.24, office.z]}>
-      <cylinderGeometry args={[0.3, 0.3, 0.48, 4]} />
-      <meshStandardMaterial color="#f59e0b" roughness={0.65} />
+    <mesh position={[office.x, 0.2, office.z]}>
+      <cylinderGeometry args={[0.24, 0.24, 0.4, 4]} />
+      <meshStandardMaterial {...WAREHOUSE_3D_MATERIALS.office} />
     </mesh>
   );
 }
 
-function RouteTrailSegment({ segment, color }: {
+type RouteSegmentState = "planned" | "traversed" | "active";
+
+function RouteTrailSegment({ segment, color, state }: {
   segment: Warehouse3DRouteVisualSegment;
   color: string;
+  state: RouteSegmentState;
 }) {
+  const route = WAREHOUSE_3D_VISUALS.route;
+  const radius = state === "active"
+    ? route.activeRadius
+    : state === "traversed" ? route.traversedRadius : route.radius;
+  const opacity = state === "active"
+    ? route.activeOpacity
+    : state === "traversed" ? route.traversedOpacity : route.opacity;
   const quaternion = useMemo(() => {
     if (segment.visualLength === 0) return new Quaternion();
     const direction = new Vector3(
@@ -583,11 +747,13 @@ function RouteTrailSegment({ segment, color }: {
   if (segment.visualLength === 0) {
     return (
       <mesh position={[segment.from.x, segment.from.y, segment.from.z]} renderOrder={2}>
-        <sphereGeometry args={[WAREHOUSE_3D_VISUALS.route.radius, 8, 6]} />
+        <sphereGeometry args={[radius, 6, 5]} />
         <meshBasicMaterial
           color={color}
-          depthTest={WAREHOUSE_3D_VISUALS.route.depthTest}
-          depthWrite={WAREHOUSE_3D_VISUALS.route.depthWrite}
+          transparent
+          opacity={opacity}
+          depthTest={route.depthTest}
+          depthWrite={route.depthWrite}
         />
       </mesh>
     );
@@ -601,39 +767,52 @@ function RouteTrailSegment({ segment, color }: {
         renderOrder={2}
       >
         <cylinderGeometry args={[
-          WAREHOUSE_3D_VISUALS.route.radius,
-          WAREHOUSE_3D_VISUALS.route.radius,
+          radius,
+          radius,
           segment.visualLength,
-          WAREHOUSE_3D_VISUALS.route.radialSegments,
+          route.radialSegments,
         ]} />
         <meshBasicMaterial
           color={color}
-          depthTest={WAREHOUSE_3D_VISUALS.route.depthTest}
-          depthWrite={WAREHOUSE_3D_VISUALS.route.depthWrite}
+          transparent
+          opacity={opacity}
+          depthTest={route.depthTest}
+          depthWrite={route.depthWrite}
         />
       </mesh>
       <mesh position={[segment.from.x, segment.from.y, segment.from.z]} renderOrder={2}>
-        <sphereGeometry args={[WAREHOUSE_3D_VISUALS.route.radius, 8, 6]} />
+        <sphereGeometry args={[radius, 6, 5]} />
         <meshBasicMaterial
           color={color}
-          depthTest={WAREHOUSE_3D_VISUALS.route.depthTest}
-          depthWrite={WAREHOUSE_3D_VISUALS.route.depthWrite}
+          transparent
+          opacity={opacity}
+          depthTest={route.depthTest}
+          depthWrite={route.depthWrite}
         />
       </mesh>
     </group>
   );
 }
 
-function RouteTrail({ graph, timeline, transform, color }: {
+function RouteTrail({ graph, timeline, transform, color, activeLegIndex, complete, coordinates }: {
   graph: WarehouseGraph;
   timeline: RouteTimeline;
   transform: Warehouse3DTransform;
   color: string;
+  activeLegIndex: number | null;
+  complete: boolean;
+  coordinates: ReadonlyMap<NodeId, Point>;
 }) {
   const segments = useMemo(
-    () => buildWarehouse3DRouteVisualSegments(graph, timeline, transform),
-    [graph, timeline, transform],
+    () => buildWarehouse3DRouteVisualSegments(graph, timeline, transform, coordinates),
+    [coordinates, graph, timeline, transform],
   );
+  const segmentState = (legIndex: number): RouteSegmentState => {
+    if (complete) return "traversed";
+    if (activeLegIndex === null) return "planned";
+    if (legIndex < activeLegIndex) return "traversed";
+    return legIndex === activeLegIndex ? "active" : "planned";
+  };
   const finalPoint = segments.at(-1)?.to;
 
   return (
@@ -643,13 +822,16 @@ function RouteTrail({ graph, timeline, transform, color }: {
           key={`${segment.fromId}-${segment.toId}-${index}`}
           segment={segment}
           color={color}
+          state={segmentState(segment.legIndex)}
         />
       ))}
       {finalPoint ? (
         <mesh position={[finalPoint.x, finalPoint.y, finalPoint.z]} renderOrder={2}>
-          <sphereGeometry args={[WAREHOUSE_3D_VISUALS.route.radius, 8, 6]} />
+          <sphereGeometry args={[WAREHOUSE_3D_VISUALS.route.radius, 6, 5]} />
           <meshBasicMaterial
             color={color}
+            transparent
+            opacity={WAREHOUSE_3D_VISUALS.route.opacity}
             depthTest={WAREHOUSE_3D_VISUALS.route.depthTest}
             depthWrite={WAREHOUSE_3D_VISUALS.route.depthWrite}
           />
@@ -659,14 +841,20 @@ function RouteTrail({ graph, timeline, transform, color }: {
   );
 }
 
+/**
+ * One worker primitive. The solid pass participates in scene depth so the
+ * operator sits inside the racking; the ghost pass redraws only the
+ * identifying parts depth-independently so they are never entirely lost.
+ */
 function WorkerVisualPartMesh({ part }: { part: WarehouseWorkerVisualPart }) {
+  const policy = WAREHOUSE_WORKER_DEPTH_POLICY.body;
   const material = (
     <meshStandardMaterial
       color={part.color}
       roughness={part.role === "equipment" ? 0.62 : 0.78}
       metalness={part.role === "equipment" ? 0.1 : 0}
-      depthTest={false}
-      depthWrite={false}
+      depthTest={policy.depthTest}
+      depthWrite={policy.depthWrite}
     />
   );
 
@@ -676,7 +864,8 @@ function WorkerVisualPartMesh({ part }: { part: WarehouseWorkerVisualPart }) {
         position={part.position}
         rotation={part.rotation}
         scale={part.scale}
-        renderOrder={5}
+        renderOrder={policy.renderOrder}
+        castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.worker}
       >
         <sphereGeometry args={[part.radius, 12, 10]} />
         {material}
@@ -686,7 +875,12 @@ function WorkerVisualPartMesh({ part }: { part: WarehouseWorkerVisualPart }) {
 
   if (part.primitive === "cylinder") {
     return (
-      <mesh position={part.position} rotation={part.rotation} renderOrder={5}>
+      <mesh
+        position={part.position}
+        rotation={part.rotation}
+        renderOrder={policy.renderOrder}
+        castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.worker}
+      >
         <cylinderGeometry args={[
           part.topRadius,
           part.bottomRadius,
@@ -699,44 +893,96 @@ function WorkerVisualPartMesh({ part }: { part: WarehouseWorkerVisualPart }) {
   }
 
   return (
-    <mesh position={part.position} rotation={part.rotation} renderOrder={5}>
+    <mesh
+      position={part.position}
+      rotation={part.rotation}
+      renderOrder={policy.renderOrder}
+      castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.worker}
+    >
       <boxGeometry args={part.size} />
       {material}
     </mesh>
   );
 }
 
-function WorkerMarker({ graph, timeline, snapshot, transform, color, gesture }: {
+/** A short scan indicator from the scanner head toward the bay being counted. */
+function WorkerScanCue({ cue }: { cue: WarehouseWorkerScanCue }) {
+  const { quaternion, midpoint, endpoint } = useMemo(() => {
+    const direction = new Vector3(...cue.direction).normalize();
+    const origin = new Vector3(...cue.origin);
+    return {
+      quaternion: new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), direction),
+      midpoint: origin.clone().add(direction.clone().multiplyScalar(cue.length / 2)),
+      endpoint: origin.clone().add(direction.clone().multiplyScalar(cue.length)),
+    };
+  }, [cue]);
+  const policy = WAREHOUSE_WORKER_DEPTH_POLICY.locator;
+
+  return (
+    <group>
+      <mesh
+        position={midpoint}
+        quaternion={quaternion}
+        renderOrder={policy.renderOrder}
+      >
+        <cylinderGeometry args={[0.009, 0.009, cue.length, 6]} />
+        <meshBasicMaterial
+          color={WAREHOUSE_WORKER_COLORS.safety}
+          transparent
+          opacity={0.22 + 0.34 * cue.intensity}
+          depthTest={policy.depthTest}
+          depthWrite={policy.depthWrite}
+        />
+      </mesh>
+      <mesh position={endpoint} renderOrder={policy.renderOrder}>
+        <sphereGeometry args={[0.035, 8, 6]} />
+        <meshBasicMaterial
+          color={WAREHOUSE_WORKER_COLORS.safety}
+          transparent
+          opacity={0.3 + 0.45 * cue.intensity}
+          depthTest={policy.depthTest}
+          depthWrite={policy.depthWrite}
+        />
+      </mesh>
+    </group>
+  );
+}
+
+function WorkerMarker({
+  graph,
+  timeline,
+  snapshot,
+  transform,
+  color,
+  gesture,
+  figureScale,
+  coordinates,
+}: {
   graph: WarehouseGraph;
   timeline: RouteTimeline;
   snapshot: SimulationSnapshot;
   transform: Warehouse3DTransform;
   color: string;
   gesture: WarehouseCountingGesture | null;
+  figureScale: number;
+  coordinates: ReadonlyMap<NodeId, Point>;
 }) {
   const pose = useMemo(
-    () => createWarehouseWorkerPose(graph, timeline, snapshot, transform),
-    [graph, snapshot, timeline, transform],
+    () => createWarehouseWorkerPose(graph, timeline, snapshot, transform, coordinates),
+    [coordinates, graph, snapshot, timeline, transform],
   );
   const visual = useMemo(
-    () => createWarehouseWorkerVisual(color, gesture),
-    [color, gesture],
+    () => createWarehouseWorkerVisual(color, gesture, figureScale),
+    [color, figureScale, gesture],
   );
+  const scanCue = useMemo(() => createWarehouseWorkerScanCue(gesture), [gesture]);
 
   return (
     <group position={[pose.position.x, 0, pose.position.z]}>
       <mesh
-        position={[0, 0.05, 0]}
-        rotation={[-Math.PI / 2, 0, 0]}
-        renderOrder={3}
-      >
-        <circleGeometry args={[WAREHOUSE_3D_VISUALS.worker.discRadius, 24]} />
-        <meshBasicMaterial color="#ffffff" depthTest={false} depthWrite={false} />
-      </mesh>
-      <mesh
         position={[0, 0.055, 0]}
         rotation={[-Math.PI / 2, 0, 0]}
-        renderOrder={4}
+        renderOrder={WAREHOUSE_WORKER_DEPTH_POLICY.locator.renderOrder}
       >
         <ringGeometry args={[
           WAREHOUSE_3D_VISUALS.worker.ringInnerRadius,
@@ -750,8 +996,46 @@ function WorkerMarker({ graph, timeline, snapshot, transform, color, gesture }: 
         scale={[visual.figureScale, visual.figureScale, visual.figureScale]}
       >
         {visual.parts.map((part) => <WorkerVisualPartMesh key={part.id} part={part} />)}
+        {scanCue ? <WorkerScanCue cue={scanCue} /> : null}
       </group>
+      {/* Small depth-independent pip so the operator stays locatable behind racking. */}
+      <mesh
+        position={[0, 2.05, 0]}
+        renderOrder={WAREHOUSE_WORKER_DEPTH_POLICY.locator.renderOrder}
+      >
+        <sphereGeometry args={[WAREHOUSE_WORKER_DEPTH_POLICY.locator.pipRadius, 8, 6]} />
+        <meshBasicMaterial color={color} depthTest={false} depthWrite={false} />
+      </mesh>
     </group>
+  );
+}
+
+/**
+ * One key light does the grounding. Shadows are the cheapest way to give the
+ * scene real object-to-floor contact, and they are dropped on narrow canvases
+ * so mobile keeps its headroom.
+ */
+function WarehouseKeyLight() {
+  const { size } = useThree();
+  const { lighting, shadow } = WAREHOUSE_3D_MATERIALS;
+  const castShadow = size.width >= shadow.minimumCanvasWidth;
+
+  return (
+    <directionalLight
+      position={lighting.keyPosition}
+      intensity={lighting.keyIntensity}
+      castShadow={castShadow}
+      shadow-mapSize-width={shadow.mapSize}
+      shadow-mapSize-height={shadow.mapSize}
+      shadow-camera-left={-shadow.frustum}
+      shadow-camera-right={shadow.frustum}
+      shadow-camera-top={shadow.frustum}
+      shadow-camera-bottom={-shadow.frustum}
+      shadow-camera-near={shadow.near}
+      shadow-camera-far={shadow.far}
+      shadow-bias={shadow.bias}
+      shadow-intensity={shadow.opacity}
+    />
   );
 }
 
@@ -765,6 +1049,7 @@ interface Warehouse3DSceneProps {
   cameraChannel: WarehouseCameraChannel;
   cameraAuthority: boolean;
   cameraInstanceId: string;
+  viewMode: "compare" | "explore";
 }
 
 function Warehouse3DScene({
@@ -777,6 +1062,7 @@ function Warehouse3DScene({
   cameraChannel,
   cameraAuthority,
   cameraInstanceId,
+  viewMode,
 }: Warehouse3DSceneProps) {
   const transform = useMemo(() => createWarehouse3DTransform(graph), [graph]);
   const environment = useMemo(
@@ -791,6 +1077,8 @@ function Warehouse3DScene({
   // One coordinate lookup for every service visual and location marker in this
   // scene, instead of one rebuilt lookup per decorative primitive.
   const coordinates = useMemo(() => buildCoordinateLookup(graph), [graph]);
+  // The operator and the walking overlay stand in the aisle, not inside the bin.
+  const operatorCoordinates = useMemo(() => buildOperatorCoordinateLookup(graph), [graph]);
   const routeIds = useMemo(() => new Set(timeline.order.slice(1)), [timeline.order]);
   const activeService = useMemo(
     () => createWarehouseActiveServiceVisual(snapshot, transform, coordinates),
@@ -804,10 +1092,40 @@ function Warehouse3DScene({
     () => getWarehouseWorkerCountingGesture(snapshot),
     [snapshot],
   );
-  const [detailLevel, setDetailLevel] = useState<WarehouseLocationDetailLevel>("overview");
+  const activeStandPoint = useMemo(() => {
+    if (!activeService) return null;
+    const point = operatorCoordinates.get(activeService.locationId);
+    return point ? projectDisplayPointToWarehouse3D(point, transform) : null;
+  }, [activeService, operatorCoordinates, transform]);
+  // One quantized zoom value drives every level-of-detail decision, so a whole
+  // orbit or pinch produces a handful of React updates rather than one a frame.
+  const [zoomBucket, setZoomBucket] = useState(1);
+  const handleZoomBucketChange = useCallback((bucket: number) => {
+    setZoomBucket((current) => current === bucket ? current : bucket);
+  }, []);
+  const detailLevel = getWarehouseDetailLevelForZoomRatio(zoomBucket);
   const environmentDetailLevel = getWarehouseEnvironmentDetailLevel(detailLevel, cameraPreset);
-  const handleDetailLevelChange = useCallback((nextLevel: WarehouseLocationDetailLevel) => {
-    setDetailLevel((currentLevel) => currentLevel === nextLevel ? currentLevel : nextLevel);
+  const workerFigureScale = getWarehouseWorkerFigureScale(zoomBucket);
+
+  // Renderer-ephemeral: the one service event the viewer has taken the camera
+  // away from. Cleared whenever they ask for a preset or reset.
+  const [suppressedLocationId, setSuppressedLocationId] = useState<NodeId | null>(null);
+  useEffect(() => {
+    setSuppressedLocationId(null);
+  }, [cameraResetRequest]);
+  const storyFocus = useMemo(
+    () => getWarehouseStoryCameraFocus(timeline, snapshot, transform, coordinates, {
+      viewMode,
+      suppressedLocationId,
+    }),
+    [coordinates, snapshot, suppressedLocationId, timeline, transform, viewMode],
+  );
+  const storyFocusRef = useRef(storyFocus);
+  storyFocusRef.current = storyFocus;
+  const handleUserCameraInteraction = useCallback(() => {
+    const locationId = storyFocusRef.current?.locationId ?? null;
+    if (!locationId) return;
+    setSuppressedLocationId((current) => current === locationId ? current : locationId);
   }, []);
 
   return (
@@ -819,11 +1137,21 @@ function Warehouse3DScene({
         authority={cameraAuthority}
         instanceId={cameraInstanceId}
         workerPoint={workerPoint}
-        onDetailLevelChange={handleDetailLevelChange}
+        onZoomBucketChange={handleZoomBucketChange}
+        storyFocus={storyFocus}
+        onUserCameraInteraction={handleUserCameraInteraction}
       />
-      <color attach="background" args={["#eef3f5"]} />
-      <hemisphereLight args={["#f7fbfc", "#7d898e", 1.35]} />
-      <directionalLight position={[8, 14, 10]} intensity={1.25} />
+      <color attach="background" args={[WAREHOUSE_3D_MATERIALS.background]} />
+      <hemisphereLight args={[
+        WAREHOUSE_3D_MATERIALS.lighting.sky,
+        WAREHOUSE_3D_MATERIALS.lighting.ground,
+        WAREHOUSE_3D_MATERIALS.lighting.hemisphereIntensity,
+      ]} />
+      <WarehouseKeyLight />
+      <directionalLight
+        position={WAREHOUSE_3D_MATERIALS.lighting.fillPosition}
+        intensity={WAREHOUSE_3D_MATERIALS.lighting.fillIntensity}
+      />
       <WarehouseFloor environment={environment} />
       <WarehouseShell environment={environment} />
       <WarehouseRacks environment={environment} detailLevel={environmentDetailLevel} />
@@ -838,8 +1166,23 @@ function Warehouse3DScene({
         activePulse={activeService?.pulse ?? 0}
       />
       <OfficeMarker graph={graph} transform={transform} />
-      <RouteTrail graph={graph} timeline={timeline} transform={transform} color={color} />
-      {activeService ? <ActiveServiceVisual visual={activeService} color={color} /> : null}
+      <RouteTrail
+        graph={graph}
+        timeline={timeline}
+        transform={transform}
+        color={color}
+        activeLegIndex={snapshot.current?.legIndex ?? null}
+        complete={snapshot.isComplete}
+        coordinates={operatorCoordinates}
+      />
+      {activeService ? (
+        <ActiveServiceVisual
+          visual={activeService}
+          color={color}
+          detailLevel={detailLevel}
+          standPoint={activeStandPoint ?? activeService.position}
+        />
+      ) : null}
       {completionVisual ? (
         <ServiceCompletionPulse visual={completionVisual} color={COMPLETED_LOCATION_COLOR} />
       ) : null}
@@ -850,6 +1193,8 @@ function Warehouse3DScene({
         transform={transform}
         color={color}
         gesture={countingGesture}
+        figureScale={workerFigureScale}
+        coordinates={operatorCoordinates}
       />
     </>
   );
@@ -895,6 +1240,7 @@ export function Warehouse3DViewport(props: Warehouse3DViewportProps) {
         aria-label={props.accessibleLabel}
         aria-live="off"
         orthographic
+        shadows
         camera={{ position: [15, 19, 15], zoom: 10, near: 0.1, far: 100 }}
         dpr={[1, 1.5]}
         frameloop="demand"
@@ -911,6 +1257,7 @@ export function Warehouse3DViewport(props: Warehouse3DViewportProps) {
           cameraChannel={cameraChannel}
           cameraAuthority={cameraAuthority}
           cameraInstanceId={cameraInstanceId}
+          viewMode={props.viewMode ?? "compare"}
         />
       </Canvas>
     </div>

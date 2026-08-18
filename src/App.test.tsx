@@ -82,9 +82,13 @@ describe("App (Phase 5 dashboard)", () => {
     );
     expect(document.querySelector(".comparison-hero__summary")!.textContent).not.toMatch(/saved/);
     expect(
-      screen.getByRole("heading", { name: "Worker vs recommended route replay" }),
+      screen.getByRole("heading", { name: "Cycle Count Digital Twin" }),
     ).toBeTruthy();
-    expect(document.querySelectorAll(".route-simulation-comparison svg")).toHaveLength(2);
+    // Explore is the default digital-twin view: one warehouse projection, plus the
+    // operations column and simulation timeline that frame it.
+    expect(document.querySelectorAll(".twin [data-simulation-viewport] svg")).toHaveLength(1);
+    expect(document.querySelector(".twin__ops")).not.toBeNull();
+    expect(document.querySelector(".twin__timeline")).not.toBeNull();
   });
 
   test("moves focus and scrolls to a valid generated result without autoplay", () => {

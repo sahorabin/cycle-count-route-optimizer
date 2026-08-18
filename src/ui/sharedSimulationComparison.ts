@@ -27,3 +27,29 @@ export function getSharedComparisonSnapshots(
     recommended: getSimulationSnapshotAtTime(recommendedTimeline, sharedTimeSeconds),
   };
 }
+
+export interface SharedComparisonSavings {
+  readonly walkingSecondsSaved: number;
+  readonly operatingSecondsSaved: number;
+}
+
+/**
+ * Reads the saving straight off the two finished timelines. Like the distance
+ * comparison, values are clamped at zero rather than ever shown negative: a
+ * recommendation that is not faster is reported as no saving, never a loss.
+ */
+export function getSharedComparisonSavings(
+  workerTimeline: RouteTimeline,
+  recommendedTimeline: RouteTimeline,
+): SharedComparisonSavings {
+  return {
+    walkingSecondsSaved: Math.max(
+      0,
+      workerTimeline.walkingDurationSeconds - recommendedTimeline.walkingDurationSeconds,
+    ),
+    operatingSecondsSaved: Math.max(
+      0,
+      workerTimeline.totalDurationSeconds - recommendedTimeline.totalDurationSeconds,
+    ),
+  };
+}

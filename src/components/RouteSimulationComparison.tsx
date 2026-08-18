@@ -6,10 +6,14 @@ import {
   getSharedComparisonDuration,
   getSharedComparisonSnapshots,
 } from "../ui/sharedSimulationComparison";
+import { projectSimulationMarkerToSvg } from "../ui/simulationMarker";
 import {
   createWarehouseCameraChannel,
   type WarehouseCameraPreset,
 } from "../ui/warehouse3dCamera";
+import { CameraToolbar } from "./CameraToolbar";
+import { OperationsPanel } from "./OperationsPanel";
+import { WarehouseMap } from "./WarehouseMap";
 import {
   RouteSimulationViewport,
   type ReplayRouteMode,
@@ -27,18 +31,6 @@ interface RouteSimulationComparisonProps {
 }
 
 const PLAYBACK_RATES = [0.5, 1, 2, 5, 10] as const;
-const CAMERA_PRESETS: readonly WarehouseCameraPreset[] = [
-  "overview",
-  "top",
-  "aisle",
-  "worker",
-];
-const CAMERA_PRESET_KEYS = {
-  overview: "replay.camera.overview",
-  top: "replay.camera.top",
-  aisle: "replay.camera.aisle",
-  worker: "replay.camera.worker",
-} as const;
 type SimulationViewMode = "compare" | "explore";
 
 function formatReplayTime(totalSeconds: number): string {
@@ -54,6 +46,11 @@ function formatReplayTime(totalSeconds: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+/**
+ * The digital-twin application shell: a compact bar, a telemetry column, the
+ * dominant 3D stage, a camera rail, and a simulation timeline. It owns exactly
+ * one playback clock and derives both route snapshots from the same time.
+ */
 export function RouteSimulationComparison({
   graph,
   visitIds,
@@ -65,7 +62,7 @@ export function RouteSimulationComparison({
   const { t } = useTranslation();
   const comparisonId = useId();
   const [rendererMode, setRendererMode] = useState<SimulationRendererMode>("3d");
-  const [viewMode, setViewMode] = useState<SimulationViewMode>("compare");
+  const [viewMode, setViewMode] = useState<SimulationViewMode>("explore");
   const [exploreRoute, setExploreRoute] = useState<ReplayRouteMode>("worker");
   const [cameraPreset, setCameraPreset] = useState<WarehouseCameraPreset>("overview");
   const [cameraResetRequest, setCameraResetRequest] = useState(0);
@@ -94,124 +91,62 @@ export function RouteSimulationComparison({
       ),
     [playback.clock.timeSeconds, recommended.timeline, worker.timeline],
   );
+  const locationLabels = useMemo(
+    () => new Map(graph.locations.map((location) => [location.id, location.label])),
+    [graph.locations],
+  );
+  const focusRoute: ReplayRouteMode = viewMode === "explore" ? exploreRoute : "worker";
+  const focusInput = focusRoute === "worker" ? worker : recommended;
+  const focusSnapshot = focusRoute === "worker" ? snapshots.worker : snapshots.recommended;
+
   const selectCameraPreset = (preset: WarehouseCameraPreset) => {
     setCameraPreset(preset);
     setCameraResetRequest((request) => request + 1);
   };
   const selectExploreRoute = (route: ReplayRouteMode) => {
     setExploreRoute(route);
-    if (cameraPreset === "worker") {
-      setCameraResetRequest((request) => request + 1);
-    }
+    if (cameraPreset === "worker") setCameraResetRequest((request) => request + 1);
+  };
+
+  // The minimap reuses the existing SVG projection of the same truth rather
+  // than modelling the warehouse a second time.
+  const minimapMarker = useMemo(
+    () => projectSimulationMarkerToSvg(graph, focusInput.timeline, focusSnapshot),
+    [focusInput.timeline, focusSnapshot, graph],
+  );
+  const minimapSelected = useMemo(
+    () => new Set(focusInput.timeline.order.slice(1)),
+    [focusInput.timeline.order],
+  );
+  const minimapCompleted = useMemo(
+    () => new Set(focusSnapshot.completedDestinationIds),
+    [focusSnapshot.completedDestinationIds],
+  );
+  const emptyMatches = useMemo(() => new Set<NodeId>(), []);
+
+  const viewportProps = {
+    graph,
+    visitIds,
+    pathMatrix,
+    rendererMode,
+    cameraPreset,
+    cameraResetRequest,
+    cameraChannel,
   };
 
   return (
-    <section className="route-simulation-comparison" aria-labelledby={`${comparisonId}-title`}>
-      <header className="route-simulation-comparison__heading">
-        <p className="route-simulation-comparison__eyebrow">{t("replay.eyebrow")}</p>
-        <h2 id={`${comparisonId}-title`}>{t("replay.title")}</h2>
-        <div className="route-simulation-comparison__conditions">
-          <p>{t("replay.sameConditions")}</p>
-          <strong>{t("replay.onlyRouteDiffers")}</strong>
-        </div>
-      </header>
-
-      <div className="route-simulation-comparison__shared-controls">
-        <div className="route-simulation-comparison__time">
-          <span>{t("replay.simulationTime")}</span>
-          <strong>
-            {formatReplayTime(playback.clock.timeSeconds)} /{" "}
-            {formatReplayTime(sharedDurationSeconds)}
-          </strong>
+    <section className="twin" aria-labelledby={`${comparisonId}-title`}>
+      <header className="twin__bar">
+        <div className="twin__identity">
+          <h2 id={`${comparisonId}-title`}>{t("twin.title")}</h2>
+          <p>{t("twin.context")}</p>
         </div>
 
-        <div className="route-simulation-comparison__controls">
-          <fieldset className="route-simulation-comparison__renderer-modes">
-            <legend>{t("replay.renderer")}</legend>
-            <div>
-              {(["3d", "2d"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  aria-pressed={rendererMode === mode}
-                  onClick={() => setRendererMode(mode)}
-                >
-                  {mode === "3d" ? t("replay.renderer3d") : t("replay.renderer2d")}
-                </button>
-              ))}
-            </div>
-          </fieldset>
-          <div className="route-simulation-comparison__transport">
-            <button
-              type="button"
-              className="route-simulation-comparison__primary"
-              disabled={playback.clock.timeSeconds >= sharedDurationSeconds}
-              onClick={playback.clock.isPlaying ? playback.pause : playback.play}
-            >
-              {playback.clock.isPlaying ? t("replay.pause") : t("replay.play")}
-            </button>
-            <button type="button" onClick={playback.reset}>
-              {t("replay.reset")}
-            </button>
-          </div>
-
-          <label className="route-simulation-comparison__seek">
-            <span>{t("replay.seek")}</span>
-            <input
-              type="range"
-              min={0}
-              max={sharedDurationSeconds}
-              step={1}
-              value={playback.clock.timeSeconds}
-              aria-valuetext={t("replay.seekValue", {
-                current: formatReplayTime(playback.clock.timeSeconds),
-                total: formatReplayTime(sharedDurationSeconds),
-              })}
-              onChange={(event) => playback.seek(Number(event.target.value))}
-              onKeyDown={(event) => {
-                let nextTime: number | null = null;
-                if (event.key === "ArrowRight") {
-                  nextTime = playback.clock.timeSeconds + 1;
-                } else if (event.key === "ArrowLeft") {
-                  nextTime = playback.clock.timeSeconds - 1;
-                } else if (event.key === "Home") {
-                  nextTime = 0;
-                } else if (event.key === "End") {
-                  nextTime = sharedDurationSeconds;
-                }
-
-                if (nextTime !== null) {
-                  event.preventDefault();
-                  playback.seek(nextTime);
-                }
-              }}
-            />
-          </label>
-
-          <fieldset className="route-simulation-comparison__rates">
-            <legend>{t("replay.playbackRate")}</legend>
-            <div>
-              {PLAYBACK_RATES.map((rate) => (
-                <button
-                  key={rate}
-                  type="button"
-                  aria-pressed={playback.clock.playbackRate === rate}
-                  onClick={() => playback.setRate(rate)}
-                >
-                  {rate}×
-                </button>
-              ))}
-            </div>
-          </fieldset>
-        </div>
-      </div>
-
-      {rendererMode === "3d" ? (
-        <div className="route-simulation-comparison__camera-controls">
-          <fieldset className="route-simulation-comparison__view-modes">
+        <div className="twin__modes">
+          <fieldset className="twin__switch">
             <legend>{t("replay.viewMode")}</legend>
             <div>
-              {(["compare", "explore"] as const).map((mode) => (
+              {(["explore", "compare"] as const).map((mode) => (
                 <button
                   key={mode}
                   type="button"
@@ -225,7 +160,7 @@ export function RouteSimulationComparison({
           </fieldset>
 
           {viewMode === "explore" ? (
-            <fieldset className="route-simulation-comparison__explore-routes">
+            <fieldset className="twin__switch">
               <legend>{t("replay.exploreRoute")}</legend>
               <div>
                 {(["worker", "recommended"] as const).map((route) => (
@@ -242,83 +177,163 @@ export function RouteSimulationComparison({
             </fieldset>
           ) : null}
 
-          <fieldset className="route-simulation-comparison__camera-presets">
-            <legend>{t("replay.camera")}</legend>
+          <fieldset className="twin__switch">
+            <legend>{t("replay.renderer")}</legend>
             <div>
-              {CAMERA_PRESETS.map((preset) => (
+              {(["3d", "2d"] as const).map((mode) => (
                 <button
-                  key={preset}
+                  key={mode}
                   type="button"
-                  aria-pressed={cameraPreset === preset}
-                  onClick={() => selectCameraPreset(preset)}
+                  aria-pressed={rendererMode === mode}
+                  onClick={() => setRendererMode(mode)}
                 >
-                  {t(CAMERA_PRESET_KEYS[preset])}
+                  {mode === "3d" ? t("replay.renderer3d") : t("replay.renderer2d")}
                 </button>
               ))}
-              <button
-                type="button"
-                className="route-simulation-comparison__camera-reset"
-                onClick={() => setCameraResetRequest((request) => request + 1)}
-              >
-                {t("replay.camera.reset")}
-              </button>
             </div>
           </fieldset>
-          <p className="route-simulation-comparison__camera-help">
-            {t("replay.camera.help")}
-          </p>
         </div>
-      ) : null}
+      </header>
 
-      <div
-        className={`route-simulation-comparison__viewports route-simulation-comparison__viewports--${rendererMode === "3d" ? viewMode : "compare"}`}
-      >
-        {rendererMode === "3d" && viewMode === "explore" ? (
-          <RouteSimulationViewport
-            graph={graph}
-            visitIds={visitIds}
-            pathMatrix={pathMatrix}
-            input={exploreRoute === "worker" ? worker : recommended}
-            snapshot={exploreRoute === "worker" ? snapshots.worker : snapshots.recommended}
-            mode={exploreRoute}
-            rendererMode={rendererMode}
-            cameraPreset={cameraPreset}
-            cameraResetRequest={cameraResetRequest}
-            cameraChannel={cameraChannel}
-            cameraAuthority
-            viewMode="explore"
+      <div className="twin__body">
+        <aside className="twin__ops" aria-label={t("twin.operations")}>
+          <OperationsPanel
+            worker={worker}
+            recommended={recommended}
+            workerSnapshot={snapshots.worker}
+            recommendedSnapshot={snapshots.recommended}
+            focus={focusRoute}
+            locationLabels={locationLabels}
           />
-        ) : (
-          <>
+        </aside>
+
+        <div
+          className={`twin__stage twin__stage--${viewMode}`}
+          aria-label={t("twin.viewport")}
+        >
+          {viewMode === "explore" ? (
             <RouteSimulationViewport
-              graph={graph}
-              visitIds={visitIds}
-              pathMatrix={pathMatrix}
-              input={worker}
-              snapshot={snapshots.worker}
-              mode="worker"
-              rendererMode={rendererMode}
-              cameraPreset={cameraPreset}
-              cameraResetRequest={cameraResetRequest}
-              cameraChannel={cameraChannel}
+              {...viewportProps}
+              input={focusInput}
+              snapshot={focusSnapshot}
+              mode={exploreRoute}
               cameraAuthority
+              viewMode="explore"
             />
-            <RouteSimulationViewport
-              graph={graph}
-              visitIds={visitIds}
-              pathMatrix={pathMatrix}
-              input={recommended}
-              snapshot={snapshots.recommended}
-              mode="recommended"
-              rendererMode={rendererMode}
-              cameraPreset={cameraPreset}
-              cameraResetRequest={cameraResetRequest}
-              cameraChannel={cameraChannel}
-              cameraAuthority={false}
-            />
-          </>
-        )}
+          ) : (
+            <>
+              <RouteSimulationViewport
+                {...viewportProps}
+                input={worker}
+                snapshot={snapshots.worker}
+                mode="worker"
+                cameraAuthority
+              />
+              <RouteSimulationViewport
+                {...viewportProps}
+                input={recommended}
+                snapshot={snapshots.recommended}
+                mode="recommended"
+                cameraAuthority={false}
+              />
+            </>
+          )}
+
+          {rendererMode === "3d" ? (
+            <div className="twin__minimap" aria-label={t("twin.minimap")} role="img">
+              <WarehouseMap
+                graph={graph}
+                selected={minimapSelected}
+                visitIds={visitIds}
+                pathMatrix={pathMatrix}
+                workerRoute={focusRoute === "worker" ? focusInput.route : null}
+                recommendedRoute={focusRoute === "recommended" ? focusInput.route : null}
+                routeVisibility={focusRoute}
+                manualStopIds={[...focusInput.timeline.order.slice(1)]}
+                completedIds={minimapCompleted}
+                searchMatchIds={emptyMatches}
+                simulationMarker={minimapMarker}
+                onLocationClick={() => undefined}
+              />
+            </div>
+          ) : null}
+        </div>
+
+        {rendererMode === "3d" ? (
+          <CameraToolbar
+            preset={cameraPreset}
+            onSelectPreset={selectCameraPreset}
+            onReset={() => setCameraResetRequest((request) => request + 1)}
+          />
+        ) : null}
       </div>
+
+      <footer className="twin__timeline" aria-label={t("twin.timeline")}>
+        <div className="twin__transport">
+          <button
+            type="button"
+            className="twin__primary"
+            disabled={playback.clock.timeSeconds >= sharedDurationSeconds}
+            onClick={playback.clock.isPlaying ? playback.pause : playback.play}
+          >
+            {playback.clock.isPlaying ? t("replay.pause") : t("replay.play")}
+          </button>
+          <button type="button" onClick={playback.reset}>{t("replay.reset")}</button>
+        </div>
+
+        <div className="twin__clock">
+          <span>{t("replay.simulationTime")}</span>
+          <strong>
+            {formatReplayTime(playback.clock.timeSeconds)} /{" "}
+            {formatReplayTime(sharedDurationSeconds)}
+          </strong>
+        </div>
+
+        <label className="twin__seek">
+          <span className="visually-hidden">{t("replay.seek")}</span>
+          <input
+            type="range"
+            min={0}
+            max={sharedDurationSeconds}
+            step={1}
+            value={playback.clock.timeSeconds}
+            aria-label={t("replay.seek")}
+            aria-valuetext={t("replay.seekValue", {
+              current: formatReplayTime(playback.clock.timeSeconds),
+              total: formatReplayTime(sharedDurationSeconds),
+            })}
+            onChange={(event) => playback.seek(Number(event.target.value))}
+            onKeyDown={(event) => {
+              let nextTime: number | null = null;
+              if (event.key === "ArrowRight") nextTime = playback.clock.timeSeconds + 1;
+              else if (event.key === "ArrowLeft") nextTime = playback.clock.timeSeconds - 1;
+              else if (event.key === "Home") nextTime = 0;
+              else if (event.key === "End") nextTime = sharedDurationSeconds;
+
+              if (nextTime !== null) {
+                event.preventDefault();
+                playback.seek(nextTime);
+              }
+            }}
+          />
+        </label>
+
+        <fieldset className="twin__rates">
+          <legend>{t("replay.playbackRate")}</legend>
+          <div>
+            {PLAYBACK_RATES.map((rate) => (
+              <button
+                key={rate}
+                type="button"
+                aria-pressed={playback.clock.playbackRate === rate}
+                onClick={() => playback.setRate(rate)}
+              >
+                {rate}×
+              </button>
+            ))}
+          </div>
+        </fieldset>
+      </footer>
     </section>
   );
 }

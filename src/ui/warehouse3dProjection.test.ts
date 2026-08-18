@@ -1,11 +1,16 @@
 import { describe, expect, test } from "vitest";
+import { largeWarehouse } from "../data/largeWarehouse";
+import { buildWarehouse3DEnvironment } from "./warehouse3dEnvironment";
 import { buildRouteTimeline } from "../domain/routeTimeline";
 import type { WarehouseGraph } from "../domain/types";
 import { getSimulationSnapshotAtTime } from "../simulation/simulationSnapshot";
 import { projectSimulationMarkerToSvg } from "./simulationMarker";
 import {
+  buildOperatorCoordinateLookup,
   createWarehouse3DTransform,
   InvalidWarehouse3DCoordinateError,
+  OPERATOR_AISLE_STANDOFF,
+  projectDisplayPointToWarehouse3D,
   projectNodeToWarehouse3D,
   projectSimulationMarkerTo3D,
 } from "./warehouse3dProjection";
@@ -231,5 +236,59 @@ describe("warehouse 3D projection", () => {
       workerSnapshot,
       transform,
     )).not.toEqual(projectNodeToWarehouse3D(graph, "loc", transform));
+  });
+});
+
+describe("operator standing positions", () => {
+  test("stands every attachment point part-way back toward its aisle node", () => {
+    const lookup = buildOperatorCoordinateLookup(largeWarehouse);
+    const aisleNodes = new Map(largeWarehouse.aisleNodes.map((node) => [node.id, node]));
+
+    for (const location of largeWarehouse.locations) {
+      const node = aisleNodes.get(location.aisleNodeId)!;
+      const stand = lookup.get(location.id)!;
+      expect(stand.x).toBeCloseTo(node.x + (location.x - node.x) * OPERATOR_AISLE_STANDOFF);
+      expect(stand.y).toBeCloseTo(node.y + (location.y - node.y) * OPERATOR_AISLE_STANDOFF);
+      // Strictly between the aisle and the bin, never at either extreme.
+      expect(Math.abs(stand.x - node.x)).toBeLessThan(Math.abs(location.x - node.x) + 1e-9);
+    }
+  });
+
+  test("leaves aisle nodes exactly where they are", () => {
+    const lookup = buildOperatorCoordinateLookup(largeWarehouse);
+
+    for (const node of largeWarehouse.aisleNodes) {
+      expect(lookup.get(node.id)).toEqual({ x: node.x, y: node.y });
+    }
+  });
+
+  test("places the operator outside every rack footprint", () => {
+    const transform = createWarehouse3DTransform(largeWarehouse);
+    const environment = buildWarehouse3DEnvironment(largeWarehouse, transform);
+    const lookup = buildOperatorCoordinateLookup(largeWarehouse);
+    const racks = environment.racks.map(({ footprint }) => footprint);
+
+    for (const location of largeWarehouse.locations) {
+      const stand = projectDisplayPointToWarehouse3D(lookup.get(location.id)!, transform);
+      const inside = racks.some((footprint) =>
+        stand.x > footprint.minX && stand.x < footprint.maxX
+        && stand.z > footprint.minZ && stand.z < footprint.maxZ);
+      expect({ location: location.id, insideRack: inside })
+        .toEqual({ location: location.id, insideRack: false });
+    }
+  });
+
+  test("is not a vacuous check: the bins themselves do sit inside racking", () => {
+    const transform = createWarehouse3DTransform(largeWarehouse);
+    const environment = buildWarehouse3DEnvironment(largeWarehouse, transform);
+    const racks = environment.racks.map(({ footprint }) => footprint);
+    const binsInsideRacks = largeWarehouse.locations.filter((location) => {
+      const point = projectDisplayPointToWarehouse3D(location, transform);
+      return racks.some((footprint) =>
+        point.x > footprint.minX && point.x < footprint.maxX
+        && point.z > footprint.minZ && point.z < footprint.maxZ);
+    });
+
+    expect(binsInsideRacks.length).toBe(largeWarehouse.locations.length);
   });
 });

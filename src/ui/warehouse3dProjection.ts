@@ -2,6 +2,14 @@ import type { NodeId, RouteTimeline, WarehouseGraph } from "../domain/types";
 import type { SimulationSnapshot } from "../simulation/types";
 import { buildCoordinateLookup, type Point } from "./svgPoints";
 
+/**
+ * How far along the spur, from its aisle node toward the bin, the operator is
+ * drawn. Bins sit inside their rack run, so rendering a body at the bin point
+ * would put it inside shelving; standing part-way keeps the operator in the
+ * walkable aisle, beside the rack, facing the bay being counted.
+ */
+export const OPERATOR_AISLE_STANDOFF = 0.5;
+
 export interface Warehouse3DTransform {
   readonly minX: number;
   readonly maxX: number;
@@ -18,7 +26,13 @@ export interface WorldPoint {
   readonly z: number;
 }
 
-const TARGET_WORLD_SPAN = 18;
+/**
+ * The single canonical renderer world span: `createWarehouse3DTransform` scales
+ * any warehouse so its longest display axis becomes this many world units.
+ * Camera framing derives from it too (see warehouse3dCamera.ts) so there is one
+ * source of truth for 3D framing. It is renderer-only and never operational.
+ */
+export const WAREHOUSE_WORLD_SPAN = 18;
 
 export class InvalidWarehouse3DCoordinateError extends Error {
   constructor(nodeId: string) {
@@ -58,7 +72,7 @@ export function createWarehouse3DTransform(graph: WarehouseGraph): Warehouse3DTr
     maxY,
     centerX: (minX + maxX) / 2,
     centerY: (minY + maxY) / 2,
-    visualScale: largestSpan > 0 ? TARGET_WORLD_SPAN / largestSpan : 1,
+    visualScale: largestSpan > 0 ? WAREHOUSE_WORLD_SPAN / largestSpan : 1,
   };
 }
 
@@ -81,8 +95,10 @@ export function projectNodeToWarehouse3D(
   graph: WarehouseGraph,
   nodeId: NodeId,
   transform: Warehouse3DTransform,
+  coordinates?: ReadonlyMap<NodeId, Point>,
 ): WorldPoint {
-  const point = requireDisplayPoint(buildCoordinateLookup(graph).get(nodeId), nodeId);
+  const lookup = coordinates ?? buildCoordinateLookup(graph);
+  const point = requireDisplayPoint(lookup.get(nodeId), nodeId);
   return projectDisplayPointToWarehouse3D(point, transform);
 }
 
@@ -92,13 +108,14 @@ export function projectSimulationMarkerTo3D(
   timeline: RouteTimeline,
   snapshot: SimulationSnapshot,
   transform: Warehouse3DTransform,
+  coordinates?: ReadonlyMap<NodeId, Point>,
 ): WorldPoint {
   if (snapshot.current) {
     if (snapshot.current.kind === "service") {
-      return projectNodeToWarehouse3D(graph, snapshot.current.locationId, transform);
+      return projectNodeToWarehouse3D(graph, snapshot.current.locationId, transform, coordinates);
     }
-    const from = projectNodeToWarehouse3D(graph, snapshot.current.from, transform);
-    const to = projectNodeToWarehouse3D(graph, snapshot.current.to, transform);
+    const from = projectNodeToWarehouse3D(graph, snapshot.current.from, transform, coordinates);
+    const to = projectNodeToWarehouse3D(graph, snapshot.current.to, transform, coordinates);
     return {
       x: from.x + (to.x - from.x) * snapshot.current.progress,
       y: 0,
@@ -113,5 +130,27 @@ export function projectSimulationMarkerTo3D(
   if (!snapshot.isComplete) {
     throw new Error("Incomplete simulation snapshot has no active segment.");
   }
-  return projectNodeToWarehouse3D(graph, finalNodeId, transform);
+  return projectNodeToWarehouse3D(graph, finalNodeId, transform, coordinates);
+}
+
+/**
+ * Display coordinates for the operator and the walking overlay. Aisle nodes keep
+ * their own position; attachment points (bins, the office door) resolve to a
+ * standing position in the adjacent aisle. Renderer-only -- routing distance
+ * still comes exclusively from the aisle graph.
+ */
+export function buildOperatorCoordinateLookup(graph: WarehouseGraph): Map<NodeId, Point> {
+  const lookup = buildCoordinateLookup(graph);
+  const aisleNodes = new Map(graph.aisleNodes.map((node) => [node.id, node]));
+
+  for (const attachment of [graph.start, ...graph.locations]) {
+    const aisleNode = aisleNodes.get(attachment.aisleNodeId);
+    if (!aisleNode) continue;
+    lookup.set(attachment.id, {
+      x: aisleNode.x + (attachment.x - aisleNode.x) * OPERATOR_AISLE_STANDOFF,
+      y: aisleNode.y + (attachment.y - aisleNode.y) * OPERATOR_AISLE_STANDOFF,
+    });
+  }
+
+  return lookup;
 }
