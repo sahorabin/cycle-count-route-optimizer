@@ -1114,7 +1114,7 @@
   border-color: var(--done);
   color: var(--done);
 }
-.route-simulation-viewport > .warehouse-map,
+.route-simulation-viewport__stage > .warehouse-map,
 .warehouse-3d__fallback > .warehouse-map {
   padding: 0;
   border: 0;
@@ -1152,7 +1152,6 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-2);
 }
-.route-simulation-viewport__activity,
 .route-simulation-viewport__stats > div,
 .route-simulation-viewport__time-breakdown > div {
   min-width: 0;
@@ -1161,19 +1160,112 @@
   border-radius: var(--radius);
   background: var(--bg);
 }
-.route-simulation-viewport__activity {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-}
-.route-simulation-viewport__activity span,
-.route-simulation-viewport__activity small,
 .route-simulation-viewport__time-breakdown span {
   color: var(--text-muted);
   font-size: 12px;
 }
-.route-simulation-viewport__activity strong {
+
+/* Counting HUD -- a compact overlay pinned to the viewport corner so the
+   warehouse, worker, and active location stay the primary visual. */
+.route-simulation-viewport__stage {
+  position: relative;
+  min-width: 0;
+}
+.route-simulation-viewport__hud {
+  position: absolute;
+  left: var(--space-2);
+  bottom: var(--space-2);
+  z-index: 1;
+  width: max-content;
+  max-width: min(230px, calc(100% - var(--space-4)));
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  box-shadow: 0 1px 6px rgb(15 23 42 / 12%);
+  pointer-events: none;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.route-simulation-viewport__hud p {
+  margin: var(--space-1) 0 0;
+}
+.route-simulation-viewport__hud p:first-child {
+  margin-top: 0;
+}
+.route-simulation-viewport__hud-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.route-simulation-viewport__hud-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.route-simulation-viewport__hud--service .route-simulation-viewport__hud-state {
+  color: var(--focus);
+}
+.route-simulation-viewport__hud--service .route-simulation-viewport__hud-dot {
+  background: var(--focus);
+}
+.route-simulation-viewport__hud-location span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.route-simulation-viewport__hud-location strong {
   color: var(--text-h);
+  font-size: 13px;
+}
+.route-simulation-viewport__hud-class {
+  color: var(--text-muted);
+}
+.route-simulation-viewport__hud-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.route-simulation-viewport__hud-progress progress {
+  flex: 1;
+  min-width: 90px;
+  height: 7px;
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+.route-simulation-viewport__hud-progress progress::-webkit-progress-bar {
+  background: var(--border);
+  border-radius: 999px;
+}
+.route-simulation-viewport__hud-progress progress::-webkit-progress-value {
+  background: var(--focus);
+  border-radius: 999px;
+}
+.route-simulation-viewport__hud-progress progress::-moz-progress-bar {
+  background: var(--focus);
+  border-radius: 999px;
+}
+.route-simulation-viewport__hud-progress span {
+  color: var(--text-h);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.route-simulation-viewport__hud-times {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 .route-simulation-viewport__time-breakdown {
   display: grid;
@@ -1301,10 +1393,12 @@
   .route-simulation-viewport__time-breakdown {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  .route-simulation-viewport__activity {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: var(--space-1);
+  .route-simulation-viewport__hud {
+    max-width: calc(100% - var(--space-4));
+    font-size: 11px;
+  }
+  .route-simulation-viewport__hud-progress progress {
+    min-width: 64px;
   }
   .warehouse-3d {
     height: 270px;

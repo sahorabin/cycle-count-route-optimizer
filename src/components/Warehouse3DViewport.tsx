@@ -1,9 +1,19 @@
 import { Canvas, useThree } from "@react-three/fiber";
 import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { InstancedMesh, Object3D, OrthographicCamera, Quaternion, Vector3 } from "three";
+import { DoubleSide, InstancedMesh, Object3D, OrthographicCamera, Quaternion, Vector3 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { RouteTimeline, WarehouseGraph } from "../domain/types";
+import type { NodeId, RouteTimeline, WarehouseGraph } from "../domain/types";
 import type { SimulationSnapshot } from "../simulation/types";
+import { buildCoordinateLookup, type Point } from "../ui/svgPoints";
+import {
+  createWarehouseActiveServiceVisual,
+  createWarehouseServiceCompletionVisual,
+  getWarehouseLocationVisualState,
+  getWarehouseWorkerCountingGesture,
+  type WarehouseActiveServiceVisual,
+  type WarehouseCountingGesture,
+  type WarehouseServiceCompletionVisual,
+} from "../ui/warehouse3dServiceVisual";
 import {
   clampWarehouseCameraZoom,
   createWarehouseCameraChannel,
@@ -26,6 +36,7 @@ import {
 } from "../ui/warehouse3dEnvironment";
 import {
   createWarehouse3DTransform,
+  projectDisplayPointToWarehouse3D,
   projectNodeToWarehouse3D,
   projectSimulationMarkerTo3D,
   type Warehouse3DTransform,
@@ -334,55 +345,209 @@ const WarehouseRacks = memo(function WarehouseRacks({
   );
 });
 
-function WarehouseLocations({ graph, timeline, transform, color, detailLevel }: {
-  graph: WarehouseGraph;
-  timeline: RouteTimeline;
-  transform: Warehouse3DTransform;
-  color: string;
-  detailLevel: WarehouseLocationDetailLevel;
-}) {
-  const routeIds = useMemo(() => new Set(timeline.order.slice(1)), [timeline.order]);
-  const locations = useMemo(
-    () => graph.locations.map((location) => ({
-      id: location.id,
-      point: projectNodeToWarehouse3D(graph, location.id, transform),
-      selected: routeIds.has(location.id),
-    })),
-    [graph, routeIds, transform],
-  );
+/** Counted locations step down to a neutral, low-priority cue so the active one dominates. */
+const COMPLETED_LOCATION_COLOR = "#8b9aa5";
 
-  return locations
-    .filter(({ selected }) => shouldRenderWarehouseLocation(selected, detailLevel))
-    .map(({ id, point, selected }) => selected ? (
-    <group key={id} position={[point.x, 0, point.z]}>
-      <mesh position={[0, 0.045, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+function CompletedLocationMarker({ color }: { color: string }) {
+  return (
+    <>
+      <mesh position={[0, 0.04, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[
           WAREHOUSE_3D_VISUALS.destination.ringInnerRadius,
           WAREHOUSE_3D_VISUALS.destination.ringOuterRadius,
           20,
         ]} />
+        <meshBasicMaterial color={color} transparent opacity={0.5} />
+      </mesh>
+      <mesh position={[-0.06, 0.06, 0.04]} rotation={[0, -Math.PI / 4, 0]}>
+        <boxGeometry args={[0.13, 0.025, 0.05]} />
         <meshBasicMaterial color={color} />
+      </mesh>
+      <mesh position={[0.05, 0.06, -0.02]} rotation={[0, Math.PI / 3.4, 0]}>
+        <boxGeometry args={[0.24, 0.025, 0.05]} />
+        <meshBasicMaterial color={color} />
+      </mesh>
+    </>
+  );
+}
+
+function DestinationMarker({ color, opacity, beaconScale }: {
+  color: string;
+  opacity: number;
+  beaconScale: number;
+}) {
+  const destination = WAREHOUSE_3D_VISUALS.destination;
+  return (
+    <>
+      <mesh position={[0, 0.045, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[destination.ringInnerRadius, destination.ringOuterRadius, 20]} />
+        <meshBasicMaterial color={color} transparent={opacity < 1} opacity={opacity} />
       </mesh>
       <mesh position={[0, 0.64, 0]}>
         <cylinderGeometry args={[
-          WAREHOUSE_3D_VISUALS.destination.stemRadius,
-          WAREHOUSE_3D_VISUALS.destination.stemRadius,
-          WAREHOUSE_3D_VISUALS.destination.stemHeight,
+          destination.stemRadius,
+          destination.stemRadius,
+          destination.stemHeight,
           8,
         ]} />
-        <meshBasicMaterial color={color} />
+        <meshBasicMaterial color={color} transparent={opacity < 1} opacity={opacity} />
       </mesh>
-      <mesh position={[0, WAREHOUSE_3D_VISUALS.destination.beaconY, 0]}>
-        <octahedronGeometry args={[WAREHOUSE_3D_VISUALS.destination.beaconRadius, 0]} />
-        <meshBasicMaterial color={color} />
+      <mesh position={[0, destination.beaconY, 0]} scale={beaconScale}>
+        <octahedronGeometry args={[destination.beaconRadius, 0]} />
+        <meshBasicMaterial color={color} transparent={opacity < 1} opacity={opacity} />
       </mesh>
+    </>
+  );
+}
+
+/**
+ * Renders the pending / active / completed hierarchy straight from snapshot
+ * truth. Display points are projected once from a shared coordinate lookup
+ * rather than rebuilt per location on every frame.
+ */
+function WarehouseLocations({
+  graph,
+  coordinates,
+  transform,
+  color,
+  detailLevel,
+  snapshot,
+  routeIds,
+  activePulse,
+}: {
+  graph: WarehouseGraph;
+  coordinates: ReadonlyMap<NodeId, Point>;
+  transform: Warehouse3DTransform;
+  color: string;
+  detailLevel: WarehouseLocationDetailLevel;
+  snapshot: SimulationSnapshot;
+  routeIds: ReadonlySet<NodeId>;
+  activePulse: number;
+}) {
+  const locations = useMemo(
+    () => graph.locations.flatMap((location) => {
+      const point = coordinates.get(location.id);
+      return point
+        ? [{ id: location.id, point: projectDisplayPointToWarehouse3D(point, transform) }]
+        : [];
+    }),
+    [coordinates, graph, transform],
+  );
+
+  return locations.flatMap(({ id, point }) => {
+    const state = getWarehouseLocationVisualState(id, snapshot, routeIds);
+    if (!shouldRenderWarehouseLocation(state !== "idle", detailLevel)) return [];
+
+    if (state === "idle") {
+      return [(
+        <mesh key={id} position={[point.x, 0.08, point.z]}>
+          <sphereGeometry args={[0.065, 8, 6]} />
+          <meshStandardMaterial color="#b7c1c9" roughness={0.85} />
+        </mesh>
+      )];
+    }
+
+    return [(
+      <group key={id} position={[point.x, 0, point.z]}>
+        {state === "completed" ? (
+          <CompletedLocationMarker color={COMPLETED_LOCATION_COLOR} />
+        ) : (
+          <DestinationMarker
+            color={color}
+            opacity={state === "active" ? 1 : 0.62}
+            beaconScale={state === "active" ? 1 + 0.16 * activePulse : 1}
+          />
+        )}
+      </group>
+    )];
+  });
+}
+
+/**
+ * World-space counting emphasis at the location currently being serviced:
+ * a breathing ground halo, a soft vertical column, and a segmented progress
+ * ring. Every value comes from the supplied descriptor -- nothing is timed,
+ * measured, or recomputed here.
+ */
+function ActiveServiceVisual({ visual, color }: {
+  visual: WarehouseActiveServiceVisual;
+  color: string;
+}) {
+  const { position, pulse, ring } = visual;
+
+  return (
+    <group position={[position.x, 0, position.z]}>
+      <mesh position={[0, 0.035, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={2}>
+        <ringGeometry args={[0.64, 0.74 + 0.06 * pulse, 32]} />
+        <meshBasicMaterial
+          color={color}
+          transparent
+          opacity={0.26 + 0.2 * pulse}
+          depthTest={false}
+          depthWrite={false}
+        />
+      </mesh>
+      <mesh position={[0, 0.85, 0]}>
+        <cylinderGeometry args={[0.34, 0.34, 1.7, 12, 1, true]} />
+        <meshBasicMaterial
+          color={color}
+          transparent
+          opacity={0.08 + 0.05 * pulse}
+          depthWrite={false}
+          side={DoubleSide}
+        />
+      </mesh>
+      {ring.segments.map((segment) => (
+        <mesh
+          key={segment.index}
+          position={[0, 0.06, 0]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          renderOrder={3}
+        >
+          <ringGeometry args={[
+            0.5,
+            segment.filled ? 0.61 : 0.57,
+            4,
+            1,
+            segment.startAngleRadians,
+            ring.segmentAngleRadians * 0.72,
+          ]} />
+          <meshBasicMaterial
+            color={segment.filled ? color : "#a7b3bc"}
+            transparent
+            opacity={segment.filled ? 0.95 : 0.38}
+            depthTest={false}
+            depthWrite={false}
+          />
+        </mesh>
+      ))}
     </group>
-  ) : (
-    <mesh key={id} position={[point.x, 0.08, point.z]}>
-      <sphereGeometry args={[0.065, 8, 6]} />
-      <meshStandardMaterial color="#b7c1c9" roughness={0.85} />
+  );
+}
+
+/** A short expanding ring at the moment a count finishes. Adds no physical time. */
+function ServiceCompletionPulse({ visual, color }: {
+  visual: WarehouseServiceCompletionVisual;
+  color: string;
+}) {
+  const inner = 0.5 + 0.85 * (1 - visual.intensity);
+
+  return (
+    <mesh
+      position={[visual.position.x, 0.05, visual.position.z]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      renderOrder={3}
+    >
+      <ringGeometry args={[inner, inner + 0.09, 32]} />
+      <meshBasicMaterial
+        color={color}
+        transparent
+        opacity={0.55 * visual.intensity}
+        depthTest={false}
+        depthWrite={false}
+      />
     </mesh>
-    ));
+  );
 }
 
 function OfficeMarker({ graph, transform }: {
@@ -541,18 +706,22 @@ function WorkerVisualPartMesh({ part }: { part: WarehouseWorkerVisualPart }) {
   );
 }
 
-function WorkerMarker({ graph, timeline, snapshot, transform, color }: {
+function WorkerMarker({ graph, timeline, snapshot, transform, color, gesture }: {
   graph: WarehouseGraph;
   timeline: RouteTimeline;
   snapshot: SimulationSnapshot;
   transform: Warehouse3DTransform;
   color: string;
+  gesture: WarehouseCountingGesture | null;
 }) {
   const pose = useMemo(
     () => createWarehouseWorkerPose(graph, timeline, snapshot, transform),
     [graph, snapshot, timeline, transform],
   );
-  const visual = useMemo(() => createWarehouseWorkerVisual(color), [color]);
+  const visual = useMemo(
+    () => createWarehouseWorkerVisual(color, gesture),
+    [color, gesture],
+  );
 
   return (
     <group position={[pose.position.x, 0, pose.position.z]}>
@@ -619,6 +788,22 @@ function Warehouse3DScene({
     () => projectSimulationMarkerTo3D(graph, timeline, snapshot, transform),
     [graph, snapshot, timeline, transform],
   );
+  // One coordinate lookup for every service visual and location marker in this
+  // scene, instead of one rebuilt lookup per decorative primitive.
+  const coordinates = useMemo(() => buildCoordinateLookup(graph), [graph]);
+  const routeIds = useMemo(() => new Set(timeline.order.slice(1)), [timeline.order]);
+  const activeService = useMemo(
+    () => createWarehouseActiveServiceVisual(snapshot, transform, coordinates),
+    [coordinates, snapshot, transform],
+  );
+  const completionVisual = useMemo(
+    () => createWarehouseServiceCompletionVisual(timeline, snapshot, transform, coordinates),
+    [coordinates, snapshot, timeline, transform],
+  );
+  const countingGesture = useMemo(
+    () => getWarehouseWorkerCountingGesture(snapshot),
+    [snapshot],
+  );
   const [detailLevel, setDetailLevel] = useState<WarehouseLocationDetailLevel>("overview");
   const environmentDetailLevel = getWarehouseEnvironmentDetailLevel(detailLevel, cameraPreset);
   const handleDetailLevelChange = useCallback((nextLevel: WarehouseLocationDetailLevel) => {
@@ -644,19 +829,27 @@ function Warehouse3DScene({
       <WarehouseRacks environment={environment} detailLevel={environmentDetailLevel} />
       <WarehouseLocations
         graph={graph}
-        timeline={timeline}
+        coordinates={coordinates}
         transform={transform}
         color={color}
         detailLevel={detailLevel}
+        snapshot={snapshot}
+        routeIds={routeIds}
+        activePulse={activeService?.pulse ?? 0}
       />
       <OfficeMarker graph={graph} transform={transform} />
       <RouteTrail graph={graph} timeline={timeline} transform={transform} color={color} />
+      {activeService ? <ActiveServiceVisual visual={activeService} color={color} /> : null}
+      {completionVisual ? (
+        <ServiceCompletionPulse visual={completionVisual} color={COMPLETED_LOCATION_COLOR} />
+      ) : null}
       <WorkerMarker
         graph={graph}
         timeline={timeline}
         snapshot={snapshot}
         transform={transform}
         color={color}
+        gesture={countingGesture}
       />
     </>
   );

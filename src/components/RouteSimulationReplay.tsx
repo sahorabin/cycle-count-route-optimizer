@@ -94,6 +94,10 @@ export function RouteSimulationViewport({
     [snapshot.completedDestinationIds],
   );
   const emptySearchMatches = useMemo(() => new Set<NodeId>(), []);
+  const locationLabels = useMemo(
+    () => new Map(graph.locations.map((location) => [location.id, location.label])),
+    [graph.locations],
+  );
   const destinationCount = Math.max(0, input.timeline.order.length - 1);
   const status = routeStatus(snapshot);
   const statusLabel = {
@@ -101,9 +105,15 @@ export function RouteSimulationViewport({
     inProgress: t("replay.status.inProgress"),
     completed: t("replay.status.completed"),
   }[status];
-  const serviceClassLabel = snapshot.current?.kind === "service" && snapshot.current.serviceClass
-    ? t(`replay.serviceClass.${snapshot.current.serviceClass}`)
+  const service = snapshot.current?.kind === "service" ? snapshot.current : null;
+  const serviceClassLabel = service?.serviceClass
+    ? t(`replay.serviceClass.${service.serviceClass}`)
     : null;
+  const activityLabel = service
+    ? t("replay.activity.service")
+    : snapshot.isComplete
+      ? t("replay.status.completed")
+      : t("replay.activity.travel");
   const warehouseMap = (
     <WarehouseMap
       graph={graph}
@@ -139,7 +149,8 @@ export function RouteSimulationViewport({
         </span>
       </header>
 
-      {rendererMode === "3d" ? (
+      <div className="route-simulation-viewport__stage">
+        {rendererMode === "3d" ? (
         <Suspense fallback={warehouseMap}>
           <Warehouse3DViewport
             graph={graph}
@@ -163,28 +174,52 @@ export function RouteSimulationViewport({
             )}
           />
         </Suspense>
-      ) : warehouseMap}
+        ) : warehouseMap}
 
-      <div
-        className="route-simulation-viewport__activity"
-        data-simulation-activity={snapshot.current?.kind ?? (snapshot.isComplete ? "complete" : "idle")}
-        data-service-location={snapshot.current?.kind === "service" ? snapshot.current.locationId : undefined}
-        data-service-progress={snapshot.current?.kind === "service" ? snapshot.current.progress : undefined}
-      >
-        <span>{t("replay.currentActivity")}</span>
-        <strong>
-          {snapshot.current?.kind === "service"
-            ? `${t("replay.activity.service")}${serviceClassLabel ? ` · ${serviceClassLabel}` : ""}`
-            : snapshot.isComplete
-              ? t("replay.status.completed")
-              : t("replay.activity.travel")}
-        </strong>
-        {snapshot.current?.kind === "service" ? (
-          <small>
-            {formatReplayTime(snapshot.current.elapsedSeconds)} /{" "}
-            {formatReplayTime(snapshot.current.durationSeconds)}
-          </small>
-        ) : null}
+        <div
+          className={`route-simulation-viewport__hud route-simulation-viewport__hud--${service ? "service" : "travel"}`}
+          role="group"
+          aria-label={t("replay.currentActivity")}
+          // Counting values change every frame; they stay pollable truth, never announcements.
+          aria-live="off"
+          data-simulation-activity={snapshot.current?.kind ?? (snapshot.isComplete ? "complete" : "idle")}
+          data-service-location={service?.locationId}
+          data-service-progress={service?.progress}
+        >
+          <p className="route-simulation-viewport__hud-state">
+            <span className="route-simulation-viewport__hud-dot" aria-hidden="true" />
+            {activityLabel}
+          </p>
+
+          {service ? (
+            <>
+              <p className="route-simulation-viewport__hud-location">
+                <span>{t("replay.hud.location")}</span>
+                <strong>{locationLabels.get(service.locationId) ?? service.locationId}</strong>
+              </p>
+              {serviceClassLabel ? (
+                <p className="route-simulation-viewport__hud-class">{serviceClassLabel}</p>
+              ) : null}
+              <p className="route-simulation-viewport__hud-progress">
+                <progress
+                  max={1}
+                  value={service.progress}
+                  aria-label={t("replay.hud.progressLabel")}
+                />
+                <span>{Math.round(service.progress * 100)}%</span>
+              </p>
+              <p className="route-simulation-viewport__hud-times">
+                <span>
+                  {formatReplayTime(service.elapsedSeconds)} /{" "}
+                  {formatReplayTime(service.durationSeconds)}
+                </span>
+                <span>
+                  {t("replay.hud.remaining")} {formatReplayTime(service.remainingSeconds)}
+                </span>
+              </p>
+            </>
+          ) : null}
+        </div>
       </div>
 
       <div className="route-simulation-viewport__stats" aria-label={t("replay.kpis")}>

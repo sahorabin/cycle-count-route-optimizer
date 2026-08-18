@@ -3,6 +3,7 @@ import { sampleWarehouse } from "../data/sampleWarehouse";
 import { buildRouteTimeline } from "../domain/routeTimeline";
 import { getSimulationSnapshotAtTime } from "../simulation/simulationSnapshot";
 import { createWarehouse3DTransform, type WorldPoint } from "./warehouse3dProjection";
+import { createWarehouseCountingGesture } from "./warehouse3dServiceVisual";
 import {
   createWarehouseWorkerPose,
   createWarehouseWorkerVisual,
@@ -120,5 +121,91 @@ describe("warehouse3dWorker", () => {
     expect(visual.parts).toHaveLength(14);
     expect(numbers.length).toBeGreaterThan(0);
     expect(numbers.every(Number.isFinite)).toBe(true);
+  });
+});
+
+describe("warehouse worker counting pose", () => {
+  const gesture = createWarehouseCountingGesture(3);
+  const travelVisual = createWarehouseWorkerVisual("#2563eb");
+  const countingVisual = createWarehouseWorkerVisual("#2563eb", gesture);
+  const partById = (visual: ReturnType<typeof createWarehouseWorkerVisual>, id: string) => {
+    const part = visual.parts.find((candidate) => candidate.id === id);
+    if (!part) throw new Error(`Missing worker part "${id}"`);
+    return part;
+  };
+
+  test("travel keeps the existing worker pose untouched", () => {
+    expect(createWarehouseWorkerVisual("#2563eb", null)).toEqual(travelVisual);
+    expect(travelVisual.parts).toHaveLength(14);
+  });
+
+  test("service re-poses the existing primitives without adding or renaming parts", () => {
+    expect(countingVisual.parts.map(({ id }) => id))
+      .toEqual(travelVisual.parts.map(({ id }) => id));
+    expect(countingVisual.figureScale).toBe(travelVisual.figureScale);
+    expect(countingVisual).not.toEqual(travelVisual);
+  });
+
+  test("raises the scanner arm and carries the scanner forward while counting", () => {
+    const travelScanner = partById(travelVisual, "scanner");
+    const countingScanner = partById(countingVisual, "scanner");
+    const travelArm = partById(travelVisual, "right-arm");
+    const countingArm = partById(countingVisual, "right-arm");
+
+    expect(countingScanner.position[1]).toBeGreaterThan(travelScanner.position[1]);
+    expect(countingScanner.position[2]).toBeGreaterThan(travelScanner.position[2]);
+    expect(countingArm.position[2]).toBeGreaterThan(travelArm.position[2]);
+    expect(countingArm.rotation[0]).toBeLessThan(travelArm.rotation[0]);
+  });
+
+  test("gives the support arm a smaller gesture than the scanner arm", () => {
+    const scannerArm = partById(countingVisual, "right-arm");
+    const supportArm = partById(countingVisual, "left-arm");
+
+    expect(Math.abs(supportArm.rotation[0])).toBeGreaterThan(0);
+    expect(Math.abs(supportArm.rotation[0])).toBeLessThan(Math.abs(scannerArm.rotation[0]));
+    expect(supportArm.position[2]).toBeLessThan(scannerArm.position[2]);
+  });
+
+  test("keeps the feet planted and the worker root position unchanged", () => {
+    for (const id of ["left-leg", "right-leg", "left-boot", "right-boot"]) {
+      expect(partById(countingVisual, id)).toEqual(partById(travelVisual, id));
+    }
+    const transform = createWarehouse3DTransform(sampleWarehouse);
+    const snapshot = getSimulationSnapshotAtTime(timeline, 12);
+    const pose = createWarehouseWorkerPose(sampleWarehouse, timeline, snapshot, transform);
+
+    // The gesture lives entirely inside the figure; it can never displace the root.
+    expect(pose.position).toEqual(
+      createWarehouseWorkerPose(sampleWarehouse, timeline, snapshot, transform).position,
+    );
+  });
+
+  test("is deterministic for one elapsed time and varies across the scan cycle", () => {
+    const repeat = createWarehouseWorkerVisual("#2563eb", createWarehouseCountingGesture(3));
+    const later = createWarehouseWorkerVisual("#2563eb", createWarehouseCountingGesture(4.1));
+
+    expect(repeat).toEqual(countingVisual);
+    expect(partById(later, "scanner").position).not.toEqual(
+      partById(countingVisual, "scanner").position,
+    );
+  });
+
+  test("produces only finite geometry across a whole scan cycle and for invalid input", () => {
+    const samples = [0, 0.3, 0.9, 1.7, 2.2, 5, Number.NaN, Number.POSITIVE_INFINITY, -3];
+
+    for (const elapsed of samples) {
+      const numbers = visualNumbers(
+        createWarehouseWorkerVisual("#2563eb", createWarehouseCountingGesture(elapsed)),
+      );
+      expect(numbers.every(Number.isFinite)).toBe(true);
+      expect(numbers.every((value) => Math.abs(value) < 10)).toBe(true);
+    }
+  });
+
+  test("uses one identical counting pose for both route identities", () => {
+    const recommended = createWarehouseWorkerVisual("#0f9f75", gesture);
+
+    expect(withoutColor(recommended)).toEqual(withoutColor(countingVisual));
   });
 });

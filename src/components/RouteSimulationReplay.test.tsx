@@ -518,3 +518,138 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getByRole("group", { name: "탐색할 경로" })).toBeTruthy();
   });
 });
+
+describe("counting HUD", () => {
+  function serviceMidpointOf(timeline: RouteTimeline) {
+    const service = timeline.phases.find(
+      (phase) => phase.kind === "service" && phase.durationSeconds > 0,
+    );
+    if (!service || service.kind !== "service") throw new Error("Expected service phase");
+    return { service, midpoint: service.startTimeSeconds + service.durationSeconds / 2 };
+  }
+
+  test("stays restrained while travelling and never claims counting early", () => {
+    const { container } = setupComparison();
+    const hud = container.querySelector(
+      '[data-simulation-viewport="worker"] [data-simulation-activity]',
+    );
+
+    expect(hud?.getAttribute("data-simulation-activity")).toBe("travel");
+    expect(hud?.textContent).toContain("Travelling");
+    expect(hud?.getAttribute("data-service-location")).toBeNull();
+    expect(screen.queryAllByRole("progressbar", { name: "Counting progress" })).toHaveLength(0);
+    expect(screen.getAllByText("0 / 4")).toHaveLength(2);
+  });
+
+  test("shows location, service class, progress, elapsed, and remaining while counting", () => {
+    const { container, workerTimeline } = setupComparison();
+    const { service, midpoint } = serviceMidpointOf(workerTimeline);
+    fireEvent.change(screen.getByLabelText("Replay position"), { target: { value: midpoint } });
+
+    const hud = container.querySelector(
+      '[data-simulation-viewport="worker"] [data-simulation-activity]',
+    );
+    const location = sampleWarehouse.locations.find(({ id }) => id === service.locationId);
+    const progressBar = [...container.querySelectorAll(
+      '[data-simulation-viewport="worker"] progress',
+    )][0] as HTMLProgressElement;
+
+    expect(hud?.getAttribute("data-simulation-activity")).toBe("service");
+    expect(hud?.textContent).toContain("Counting");
+    expect(hud?.textContent).toContain(location!.label);
+    expect(hud?.textContent).toContain("Current location");
+    expect(hud?.textContent).toContain("Remaining");
+    expect(hud?.textContent).toContain("50%");
+    expect(hud?.textContent).toContain(`0:${String(Math.round(service.durationSeconds)).padStart(2, "0")}`);
+    expect(progressBar.value).toBeCloseTo(0.5);
+    expect(progressBar.max).toBe(1);
+    expect(progressBar.getAttribute("aria-label")).toBe("Counting progress");
+    // Service progress is not route progress: the location is not completed yet.
+    expect(screen.getAllByText("0 / 4").length).toBeGreaterThan(0);
+  });
+
+  test("counting visuals follow forward and backward seeks with no stale state", () => {
+    const { container, workerTimeline } = setupComparison();
+    const { service } = serviceMidpointOf(workerTimeline);
+    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+    const progressAttribute = () => Number(container.querySelector(
+      '[data-simulation-viewport="worker"] [data-simulation-activity]',
+    )?.getAttribute("data-service-progress"));
+
+    fireEvent.change(seek, { target: { value: service.startTimeSeconds + service.durationSeconds * 0.75 } });
+    expect(progressAttribute()).toBeCloseTo(0.75);
+
+    fireEvent.change(seek, { target: { value: service.startTimeSeconds + service.durationSeconds * 0.25 } });
+    expect(progressAttribute()).toBeCloseTo(0.25);
+
+    fireEvent.change(seek, { target: { value: service.startTimeSeconds } });
+    expect(progressAttribute()).toBe(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect(container.querySelector(
+      '[data-simulation-viewport="worker"] [data-simulation-activity]',
+    )?.getAttribute("data-simulation-activity")).toBe("travel");
+  });
+
+  test("survives renderer and view-mode switching mid-count without losing counting truth", () => {
+    const { container, workerTimeline } = setupComparison();
+    const { service, midpoint } = serviceMidpointOf(workerTimeline);
+    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+    fireEvent.change(seek, { target: { value: midpoint } });
+    fireEvent.click(screen.getByRole("button", { name: "2\u00d7" }));
+
+    const workerHud = () => container.querySelector(
+      '[data-simulation-viewport="worker"] [data-simulation-activity]',
+    );
+    const expectCounting = () => {
+      expect(workerHud()?.getAttribute("data-simulation-activity")).toBe("service");
+      expect(workerHud()?.getAttribute("data-service-location")).toBe(service.locationId);
+      expect(Number(workerHud()?.getAttribute("data-service-progress"))).toBeCloseTo(0.5);
+      expect(Number(seek.value)).toBe(midpoint);
+      expect(screen.getByRole("button", { name: "2\u00d7" }).getAttribute("aria-pressed"))
+        .toBe("true");
+    };
+
+    expectCounting();
+    fireEvent.click(screen.getByRole("button", { name: "2D" }));
+    expectCounting();
+    fireEvent.click(screen.getByRole("button", { name: "3D" }));
+    expectCounting();
+    fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+    expect(Number(workerHud()?.getAttribute("data-service-progress"))).toBeCloseTo(0.5);
+    fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+    expectCounting();
+  });
+
+  test("uses one counting visual language for both routes at the same shared time", () => {
+    const { container, workerTimeline, recommendedTimeline } = setupComparison();
+    const { midpoint } = serviceMidpointOf(workerTimeline);
+    fireEvent.change(screen.getByLabelText("Replay position"), { target: { value: midpoint } });
+
+    const activities = [...container.querySelectorAll("[data-simulation-activity]")]
+      .map((hud) => hud.getAttribute("data-simulation-activity"));
+
+    // Identical workload, one clock -- but each route is wherever its own sequence puts it.
+    expect(activities).toHaveLength(2);
+    expect(activities.every((activity) => activity === "service" || activity === "travel"))
+      .toBe(true);
+    expect(workerTimeline.serviceDurationSeconds)
+      .toBe(recommendedTimeline.serviceDurationSeconds);
+  });
+
+  test("renders the counting HUD in Korean", () => {
+    const { container, workerTimeline } = setupComparison("ko");
+    const { midpoint } = serviceMidpointOf(workerTimeline);
+    fireEvent.change(screen.getByLabelText("\uc7ac\uc0dd \uc704\uce58"), { target: { value: midpoint } });
+
+    const hud = container.querySelector(
+      '[data-simulation-viewport="worker"] [data-simulation-activity]',
+    );
+
+    expect(hud?.textContent).toContain("\uc7ac\uace0 \uc870\uc0ac \uc911");
+    expect(hud?.textContent).toContain("\ud604\uc7ac \uc704\uce58");
+    expect(hud?.textContent).toContain("\ub0a8\uc740 \uc2dc\uac04");
+    expect(screen.getAllByRole("progressbar", { name: "\uc7ac\uace0 \uc870\uc0ac \uc9c4\ud589\ub960" }).length)
+      .toBeGreaterThan(0);
+  });
+});

@@ -1,5 +1,6 @@
 import type { RouteTimeline, WarehouseGraph } from "../domain/types";
 import type { SimulationSnapshot } from "../simulation/types";
+import type { WarehouseCountingGesture } from "./warehouse3dServiceVisual";
 import {
   projectNodeToWarehouse3D,
   projectSimulationMarkerTo3D,
@@ -123,8 +124,128 @@ export function createWarehouseWorkerPose(
   return { position, yawRadians: DEFAULT_FACING_YAW, facingSource: "default" };
 }
 
-/** Same lightweight operator structure for both route identities; only identity color varies. */
-export function createWarehouseWorkerVisual(identityColor: string): WarehouseWorkerVisual {
+/** Shoulder pivot of the arm primitives, so a raised arm swings from the shoulder. */
+const SHOULDER_Y = 1.21;
+const HAND_REACH = 0.52;
+const SCANNER_REACH = 0.62;
+const ARM_CENTER_REACH = 0.25;
+
+/**
+ * Parts that follow the upper-body twist during counting. Legs, boots, and the
+ * worker root are deliberately absent: the operator's feet stay planted.
+ */
+const COUNTING_UPPER_BODY_IDS: ReadonlySet<string> = new Set([
+  "torso",
+  "vest-panel",
+  "left-arm",
+  "right-arm",
+  "left-hand",
+  "right-hand",
+  "head",
+  "hard-hat",
+  "hard-hat-brim",
+  "scanner",
+]);
+
+type PartTransform = {
+  readonly position: readonly [number, number, number];
+  readonly rotation: readonly [number, number, number];
+};
+
+function rotateAboutY(
+  [x, y, z]: readonly [number, number, number],
+  angleRadians: number,
+): readonly [number, number, number] {
+  const cos = Math.cos(angleRadians);
+  const sin = Math.sin(angleRadians);
+  return [x * cos + z * sin, y, z * cos - x * sin];
+}
+
+/** Position of a point hanging `reach` below the shoulder after swinging forward by `swing`. */
+function swungFromShoulder(
+  x: number,
+  reach: number,
+  swing: number,
+  forwardOffset = 0,
+): readonly [number, number, number] {
+  return [x, SHOULDER_Y - reach * Math.cos(swing), reach * Math.sin(swing) + forwardOffset];
+}
+
+/**
+ * Per-part counting transform. The scanner arm raises and reaches, the support
+ * arm swings slightly, and the head dips toward the scanner; everything else
+ * keeps its travel placement.
+ */
+function countingPartTransform(
+  part: WarehouseWorkerVisualPart,
+  gesture: WarehouseCountingGesture,
+): PartTransform {
+  const { armLift, supportSwing, headDip } = gesture;
+  const headOffset: readonly [number, number, number] = [0, -0.05 * headDip, 0.08 * headDip];
+
+  switch (part.id) {
+    case "right-arm":
+      return {
+        position: swungFromShoulder(0.33, ARM_CENTER_REACH, armLift),
+        rotation: [-armLift, 0, 0.16],
+      };
+    case "right-hand":
+      return { position: swungFromShoulder(0.37, HAND_REACH, armLift), rotation: part.rotation };
+    case "scanner":
+      return {
+        position: swungFromShoulder(0.4, SCANNER_REACH, armLift, 0.06),
+        rotation: [-(armLift + 0.35), 0, 0.05],
+      };
+    case "left-arm":
+      return {
+        position: swungFromShoulder(-0.33, ARM_CENTER_REACH, supportSwing),
+        rotation: [-supportSwing, 0, -0.16],
+      };
+    case "left-hand":
+      return {
+        position: swungFromShoulder(-0.37, HAND_REACH, supportSwing),
+        rotation: part.rotation,
+      };
+    case "head":
+    case "hard-hat":
+    case "hard-hat-brim":
+      return {
+        position: [
+          part.position[0] + headOffset[0],
+          part.position[1] + headOffset[1],
+          part.position[2] + headOffset[2],
+        ],
+        rotation: part.rotation,
+      };
+    default:
+      return { position: part.position, rotation: part.rotation };
+  }
+}
+
+function applyCountingGesture(
+  part: WarehouseWorkerVisualPart,
+  gesture: WarehouseCountingGesture,
+): WarehouseWorkerVisualPart {
+  if (!COUNTING_UPPER_BODY_IDS.has(part.id)) return part;
+
+  const posed = countingPartTransform(part, gesture);
+  return {
+    ...part,
+    position: rotateAboutY(posed.position, gesture.torsoTwist),
+    rotation: [posed.rotation[0], posed.rotation[1] + gesture.torsoTwist, posed.rotation[2]],
+  };
+}
+
+/**
+ * Same lightweight operator structure for both route identities; only identity
+ * color varies. Supplying a `gesture` re-poses the existing primitives into
+ * counting work -- it never adds, removes, or renames a part, and it never
+ * moves the worker root.
+ */
+export function createWarehouseWorkerVisual(
+  identityColor: string,
+  gesture: WarehouseCountingGesture | null = null,
+): WarehouseWorkerVisual {
   const worker = WAREHOUSE_3D_VISUALS.worker;
   const parts: WarehouseWorkerVisualPart[] = [
     {
@@ -206,5 +327,8 @@ export function createWarehouseWorkerVisual(identityColor: string): WarehouseWor
     },
   ];
 
-  return { figureScale: 1.3, parts };
+  return {
+    figureScale: 1.3,
+    parts: gesture ? parts.map((part) => applyCountingGesture(part, gesture)) : parts,
+  };
 }
