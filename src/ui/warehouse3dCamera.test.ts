@@ -52,6 +52,30 @@ describe("warehouse 3D camera model", () => {
     expect(channel.getView()).toEqual(recommendedView);
   });
 
+  test("removes an unmounted subscriber before a replacement camera subscribes", () => {
+    const channel = createWarehouseCameraChannel();
+    const disposedReceiver = vi.fn();
+    const unsubscribe = channel.subscribe(disposedReceiver);
+    const initialView = createWarehouseCameraPresetView("overview", 12);
+    channel.publish(initialView, "initial-camera");
+
+    unsubscribe();
+    unsubscribe();
+    const replacementReceiver = vi.fn();
+    const unsubscribeReplacement = channel.subscribe(replacementReceiver);
+    const replacementView = createWarehouseCameraPresetView("aisle", 12);
+    channel.publish(replacementView, "replacement-camera");
+
+    expect(disposedReceiver).toHaveBeenCalledTimes(1);
+    expect(replacementReceiver).toHaveBeenNthCalledWith(1, initialView, "initial");
+    expect(replacementReceiver).toHaveBeenNthCalledWith(
+      2,
+      replacementView,
+      "replacement-camera",
+    );
+    unsubscribeReplacement();
+  });
+
   test("reduces overview density but never hides selected destinations", () => {
     expect(getWarehouseLocationDetailLevel(10, 10)).toBe("overview");
     expect(getWarehouseLocationDetailLevel(14, 10)).toBe("close");

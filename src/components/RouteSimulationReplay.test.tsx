@@ -229,6 +229,31 @@ describe("RouteSimulationComparison", () => {
     expect(seek.value).toBe("30");
   });
 
+  test("survives rapid renderer and layout remount sequences without resetting shared state", () => {
+    const { container } = setupComparison();
+    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+    fireEvent.change(seek, { target: { value: 25 } });
+    fireEvent.click(screen.getByRole("button", { name: "5×" }));
+
+    for (let index = 0; index < 10; index += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "2D" }));
+      fireEvent.click(screen.getByRole("button", { name: "3D" }));
+    }
+    for (let index = 0; index < 4; index += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+      fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+      fireEvent.click(screen.getByRole("button", { name: "2D" }));
+      fireEvent.click(screen.getByRole("button", { name: "3D" }));
+    }
+
+    expect(screen.getByRole("button", { name: "3D" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Compare" }).getAttribute("aria-pressed"))
+      .toBe("true");
+    expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(2);
+    expect(seek.value).toBe("25");
+    expect(screen.getByRole("button", { name: "5×" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
   test("switches both renderers without resetting shared time, playback state, rate, or snapshots", () => {
     const frames = installAnimationFrameHarness();
     const { container, workerTimeline, recommendedTimeline } = setupComparison();

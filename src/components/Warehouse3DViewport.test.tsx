@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
+import { useThree } from "@react-three/fiber";
+import { OrthographicCamera } from "three";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { sampleWarehouse } from "../data/sampleWarehouse";
 import type { RouteTimeline } from "../domain/types";
@@ -37,8 +39,11 @@ vi.mock("@react-three/fiber", () => ({
 
 import { createWarehouse3DTransform, projectNodeToWarehouse3D } from "../ui/warehouse3dProjection";
 import {
+  InteractiveWarehouseCamera,
   Warehouse3DViewport,
 } from "./Warehouse3DViewport";
+import { createWarehouseCameraChannel } from "../ui/warehouse3dCamera";
+import { createWarehouseOrbitControlsOwner } from "../ui/warehouse3dControls";
 import {
   buildWarehouse3DRouteVisualSegments,
   WAREHOUSE_3D_VISUALS,
@@ -79,6 +84,82 @@ afterEach(() => {
 });
 
 describe("Warehouse3DViewport", () => {
+  test("connects controls only to a live canvas and disposes the owner idempotently", () => {
+    const camera = new OrthographicCamera();
+    const detachedCanvas = document.createElement("canvas");
+
+    expect(createWarehouseOrbitControlsOwner(camera, null)).toBeNull();
+    expect(createWarehouseOrbitControlsOwner(camera, detachedCanvas)).toBeNull();
+
+    const canvas = document.createElement("canvas");
+    document.body.append(canvas);
+    const addEventListener = vi.spyOn(canvas, "addEventListener");
+    const removeEventListener = vi.spyOn(canvas, "removeEventListener");
+    const owner = createWarehouseOrbitControlsOwner(camera, canvas);
+
+    expect(owner).not.toBeNull();
+    expect(addEventListener.mock.calls.filter(([event]) => event === "pointerdown"))
+      .toHaveLength(1);
+    expect(owner?.isActive()).toBe(true);
+
+    owner?.dispose();
+    owner?.dispose();
+
+    expect(owner?.isActive()).toBe(false);
+    expect(removeEventListener.mock.calls.filter(([event]) => event === "pointerdown"))
+      .toHaveLength(1);
+    canvas.remove();
+  });
+
+  test("balances controls ownership across StrictMode remounts and ignores stale camera updates", () => {
+    const canvas = document.createElement("canvas");
+    document.body.append(canvas);
+    const camera = new OrthographicCamera();
+    const invalidate = vi.fn();
+    const channel = createWarehouseCameraChannel();
+    const addEventListener = vi.spyOn(canvas, "addEventListener");
+    const removeEventListener = vi.spyOn(canvas, "removeEventListener");
+    vi.mocked(useThree).mockReturnValue({
+      camera,
+      gl: { domElement: canvas },
+      size: { width: 800, height: 600 },
+      invalidate,
+    } as never);
+
+    const view = render(
+      <StrictMode>
+        <InteractiveWarehouseCamera
+          preset="overview"
+          resetRequest={0}
+          channel={channel}
+          authority
+          instanceId="strict-mode-camera"
+          workerPoint={{ x: 0, y: 0, z: 0 }}
+          onDetailLevelChange={vi.fn()}
+        />
+      </StrictMode>,
+    );
+
+    expect(addEventListener.mock.calls.filter(([event]) => event === "pointerdown"))
+      .toHaveLength(2);
+    expect(removeEventListener.mock.calls.filter(([event]) => event === "pointerdown"))
+      .toHaveLength(1);
+
+    view.unmount();
+    const invalidationsAfterUnmount = invalidate.mock.calls.length;
+    channel.publish({
+      preset: "top",
+      position: [0, 18, 0.01],
+      target: [0, 0, 0],
+      zoom: 10,
+    }, "replacement-camera");
+
+    expect(removeEventListener.mock.calls.filter(([event]) => event === "pointerdown"))
+      .toHaveLength(2);
+    expect(invalidate).toHaveBeenCalledTimes(invalidationsAfterUnmount);
+    canvas.remove();
+  });
+
   test("builds one world-space visual cylinder descriptor per existing route segment in order", () => {
     const transform = createWarehouse3DTransform(sampleWarehouse);
     const before = JSON.stringify(routedTimeline);

@@ -16,6 +16,7 @@ import {
   type WarehouseCameraView,
   type WarehouseLocationDetailLevel,
 } from "../ui/warehouse3dCamera";
+import { createWarehouseOrbitControlsOwner } from "../ui/warehouse3dControls";
 import {
   buildWarehouse3DEnvironment,
   getWarehouseEnvironmentDetailLevel,
@@ -70,7 +71,7 @@ interface InteractiveWarehouseCameraProps {
   onDetailLevelChange: (level: WarehouseLocationDetailLevel) => void;
 }
 
-function InteractiveWarehouseCamera({
+export function InteractiveWarehouseCamera({
   preset,
   resetRequest,
   channel,
@@ -94,7 +95,9 @@ function InteractiveWarehouseCamera({
 
   useLayoutEffect(() => {
     if (!(camera instanceof OrthographicCamera)) return;
-    const controls = new OrbitControls(camera, gl.domElement);
+    const owner = createWarehouseOrbitControlsOwner(camera, gl.domElement);
+    if (!owner) return;
+    const { controls } = owner;
     controls.enableRotate = true;
     controls.enableZoom = true;
     controls.enablePan = true;
@@ -107,25 +110,30 @@ function InteractiveWarehouseCamera({
     camera.far = 100;
 
     const updateDetailLevel = () => {
+      if (!owner.isActive()) return;
       onDetailLevelChange(getWarehouseLocationDetailLevel(camera.zoom, baseZoom));
     };
     const applyView = (view: WarehouseCameraView) => {
+      if (!owner.isActive()) return;
       applyingViewRef.current = true;
-      controls.target.set(...view.target);
-      camera.position.set(...view.position);
-      camera.zoom = clampWarehouseCameraZoom(view.zoom, baseZoom);
-      camera.lookAt(...view.target);
-      camera.updateProjectionMatrix();
-      controls.update();
-      updateDetailLevel();
-      invalidate();
-      applyingViewRef.current = false;
+      try {
+        controls.target.set(...view.target);
+        camera.position.set(...view.position);
+        camera.zoom = clampWarehouseCameraZoom(view.zoom, baseZoom);
+        camera.lookAt(...view.target);
+        camera.updateProjectionMatrix();
+        controls.update();
+        updateDetailLevel();
+        invalidate();
+      } finally {
+        applyingViewRef.current = false;
+      }
     };
     applyViewRef.current = applyView;
     controlsRef.current = controls;
 
     const publishInteraction = () => {
-      if (applyingViewRef.current) return;
+      if (!owner.isActive() || applyingViewRef.current) return;
       const previousTarget = controls.target.clone();
       controls.target.set(
         Math.min(WAREHOUSE_CAMERA_LIMITS.targetExtent, Math.max(-WAREHOUSE_CAMERA_LIMITS.targetExtent, controls.target.x)),
@@ -146,18 +154,15 @@ function InteractiveWarehouseCamera({
     };
     controls.addEventListener("change", publishInteraction);
     const unsubscribe = channel.subscribe((view, sourceId) => {
-      if (sourceId !== instanceId) applyView(view);
+      if (owner.isActive() && sourceId !== instanceId) applyView(view);
     });
 
-    const existingView = channel.getView();
-    if (existingView) applyView(existingView);
-
     return () => {
+      owner.dispose();
       unsubscribe();
       controls.removeEventListener("change", publishInteraction);
-      controls.dispose();
-      controlsRef.current = null;
-      applyViewRef.current = null;
+      if (controlsRef.current === controls) controlsRef.current = null;
+      if (applyViewRef.current === applyView) applyViewRef.current = null;
     };
   }, [baseZoom, camera, channel, gl.domElement, instanceId, invalidate, onDetailLevelChange]);
 
