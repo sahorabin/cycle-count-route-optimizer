@@ -1,6 +1,8 @@
 import type {
+  CountServiceProfile,
   RouteTimeline,
   RouteTimelineLeg,
+  RouteTimelinePhase,
   RouteTimelineSegment,
   RouteTraversal,
 } from "./types";
@@ -29,13 +31,14 @@ function durationSeconds(distanceMeters: number, walkingSpeedMetersPerMinute: nu
 }
 
 /**
- * Projects a finished spatial traversal onto a continuous walking-only time
- * axis. It preserves all supplied order, legs, segments, and distances and
- * performs no routing or geometry work.
+ * Projects a finished spatial traversal and optional count workload onto one
+ * physical time axis. Omitted profiles deliberately mean zero-second service
+ * for backward-compatible low-level travel-only timelines.
  */
 export function buildRouteTimeline(
   traversal: RouteTraversal,
   walkingSpeedMetersPerMinute: number,
+  serviceProfiles?: ReadonlyMap<string, CountServiceProfile>,
 ): RouteTimeline {
   // Validate both shared inputs even for a zero-leg traversal.
   const expectedTotalDurationSeconds = durationSeconds(
@@ -48,8 +51,11 @@ export function buildRouteTimeline(
   }
 
   const legs: RouteTimelineLeg[] = [];
+  const phases: RouteTimelinePhase[] = [];
   let timelineCursor = 0;
   let accumulatedDistance = 0;
+  let walkingDurationSeconds = 0;
+  let serviceDurationSeconds = 0;
 
   for (let legIndex = 0; legIndex < traversal.legs.length; legIndex++) {
     const leg = traversal.legs[legIndex];
@@ -69,7 +75,8 @@ export function buildRouteTimeline(
     let previousNode = leg.from;
     const segments: RouteTimelineSegment[] = [];
 
-    for (const segment of leg.segments) {
+    for (let segmentIndex = 0; segmentIndex < leg.segments.length; segmentIndex++) {
+      const segment = leg.segments[segmentIndex];
       if (segment.from !== previousNode) {
         throw new InvalidRouteTimelineError(
           `segment chain is discontinuous at "${previousNode}" → "${segment.from}"`,
@@ -87,7 +94,19 @@ export function buildRouteTimeline(
         durationSeconds: segmentDurationSeconds,
         endTimeSeconds,
       });
+      phases.push({
+        kind: "travel",
+        legIndex,
+        segmentIndex,
+        from: segment.from,
+        to: segment.to,
+        distance: segment.distance,
+        startTimeSeconds,
+        durationSeconds: segmentDurationSeconds,
+        endTimeSeconds,
+      });
       timelineCursor = endTimeSeconds;
+      walkingDurationSeconds += segmentDurationSeconds;
       legDistance += segment.distance;
       previousNode = segment.to;
     }
@@ -114,6 +133,40 @@ export function buildRouteTimeline(
       segments,
     });
     accumulatedDistance += leg.distance;
+
+    const serviceProfile = serviceProfiles?.get(leg.to) ?? null;
+    if (serviceProfiles && !serviceProfile) {
+      throw new InvalidRouteTimelineError(`missing service profile for destination "${leg.to}"`);
+    }
+    if (serviceProfile && serviceProfile.locationId !== leg.to) {
+      throw new InvalidRouteTimelineError(
+        `service profile location "${serviceProfile.locationId}" does not match destination "${leg.to}"`,
+      );
+    }
+    const serviceDuration = serviceProfile?.durationSeconds ?? 0;
+    if (!Number.isFinite(serviceDuration) || serviceDuration < 0) {
+      throw new InvalidRouteTimelineError(
+        `service duration for destination "${leg.to}" must be finite and non-negative`,
+      );
+    }
+    const serviceEndTimeSeconds = timelineCursor + serviceDuration;
+    if (!Number.isFinite(serviceEndTimeSeconds)) {
+      throw new InvalidRouteTimelineError(
+        `service timeline for destination "${leg.to}" must remain finite`,
+      );
+    }
+    phases.push({
+      kind: "service",
+      legIndex,
+      locationId: leg.to,
+      serviceClass: serviceProfile?.serviceClass ?? null,
+      source: serviceProfile?.source ?? null,
+      startTimeSeconds: timelineCursor,
+      durationSeconds: serviceDuration,
+      endTimeSeconds: serviceEndTimeSeconds,
+    });
+    timelineCursor = serviceEndTimeSeconds;
+    serviceDurationSeconds += serviceDuration;
   }
 
   if (!approximatelyEqual(accumulatedDistance, traversal.totalDistance)) {
@@ -121,9 +174,9 @@ export function buildRouteTimeline(
       `leg distance ${accumulatedDistance} disagrees with traversal distance ${traversal.totalDistance}`,
     );
   }
-  if (!approximatelyEqual(timelineCursor, expectedTotalDurationSeconds)) {
+  if (!approximatelyEqual(walkingDurationSeconds, expectedTotalDurationSeconds)) {
     throw new InvalidRouteTimelineError(
-      `timeline duration ${timelineCursor} disagrees with distance-based duration ${expectedTotalDurationSeconds}`,
+      `walking duration ${walkingDurationSeconds} disagrees with distance-based duration ${expectedTotalDurationSeconds}`,
     );
   }
 
@@ -131,7 +184,10 @@ export function buildRouteTimeline(
     order: [...traversal.order],
     walkingSpeedMetersPerMinute,
     legs,
+    phases,
     totalDistance: traversal.totalDistance,
+    walkingDurationSeconds,
+    serviceDurationSeconds,
     totalDurationSeconds: timelineCursor,
   };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { sampleWarehouse } from "../data/sampleWarehouse";
-import type { RouteTimeline } from "../domain/types";
+import { buildRouteTimeline } from "../domain/routeTimeline";
 import { getSimulationSnapshotAtTime } from "../simulation/simulationSnapshot";
 import { createWarehouse3DTransform, type WorldPoint } from "./warehouse3dProjection";
 import {
@@ -9,25 +9,21 @@ import {
   getWarehouseWorkerFacingYaw,
 } from "./warehouse3dWorker";
 
-const timeline: RouteTimeline = {
+const timeline = buildRouteTimeline({
   order: ["office", "loc-D"],
-  walkingSpeedMetersPerMinute: 60,
   totalDistance: 30,
-  totalDurationSeconds: 30,
   legs: [{
     from: "office",
     to: "loc-D",
+    path: ["office", "F1", "F2", "loc-D"],
     distance: 30,
-    startTimeSeconds: 0,
-    durationSeconds: 30,
-    endTimeSeconds: 30,
     segments: [
-      { from: "office", to: "F1", distance: 8, startTimeSeconds: 0, durationSeconds: 8, endTimeSeconds: 8 },
-      { from: "F1", to: "F2", distance: 20, startTimeSeconds: 8, durationSeconds: 20, endTimeSeconds: 28 },
-      { from: "F2", to: "loc-D", distance: 2, startTimeSeconds: 28, durationSeconds: 2, endTimeSeconds: 30 },
+      { from: "office", to: "F1", distance: 8 },
+      { from: "F1", to: "F2", distance: 20 },
+      { from: "F2", to: "loc-D", distance: 2 },
     ],
   }],
-};
+}, 60);
 
 function withoutColor(visual: ReturnType<typeof createWarehouseWorkerVisual>) {
   return visual.parts.map(({ color: _color, ...part }) => part);
@@ -85,13 +81,11 @@ describe("warehouse3dWorker", () => {
   });
 
   test("uses one stable forward orientation for a route without movement", () => {
-    const stationaryTimeline: RouteTimeline = {
+    const stationaryTimeline = buildRouteTimeline({
       order: [sampleWarehouse.start.id],
-      walkingSpeedMetersPerMinute: 60,
       legs: [],
       totalDistance: 0,
-      totalDurationSeconds: 0,
-    };
+    }, 60);
     const pose = createWarehouseWorkerPose(
       sampleWarehouse,
       stationaryTimeline,

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import type { RouteTimeline, WarehouseGraph } from "../domain/types";
+import { buildRouteTimeline } from "../domain/routeTimeline";
+import type { WarehouseGraph } from "../domain/types";
 import { getSimulationSnapshotAtTime } from "../simulation/simulationSnapshot";
 import { projectSimulationMarkerToSvg } from "./simulationMarker";
 import {
@@ -21,28 +22,21 @@ const graph: WarehouseGraph = {
   ],
 };
 
-const timeline: RouteTimeline = {
+const timeline = buildRouteTimeline({
   order: ["office", "loc"],
-  walkingSpeedMetersPerMinute: 60,
   totalDistance: 10,
-  totalDurationSeconds: 10,
   legs: [{
     from: "office",
     to: "loc",
+    path: ["office", "loc"],
     distance: 10,
-    startTimeSeconds: 0,
-    durationSeconds: 10,
-    endTimeSeconds: 10,
     segments: [{
       from: "office",
       to: "loc",
       distance: 10,
-      startTimeSeconds: 0,
-      durationSeconds: 10,
-      endTimeSeconds: 10,
     }],
   }],
-};
+}, 60);
 
 describe("warehouse 3D projection", () => {
   test("creates the same deterministic centered transform for the same graph", () => {
@@ -92,23 +86,21 @@ describe("warehouse 3D projection", () => {
   });
 
   test("uses completion semantics for a zero-duration route", () => {
-    const zeroDuration: RouteTimeline = {
-      ...timeline,
+    const zeroDuration = buildRouteTimeline({
+      order: ["office", "loc"],
       totalDistance: 0,
-      totalDurationSeconds: 0,
       legs: [{
-        ...timeline.legs[0],
+        from: "office",
+        to: "loc",
+        path: ["office", "loc"],
         distance: 0,
-        durationSeconds: 0,
-        endTimeSeconds: 0,
         segments: [{
-          ...timeline.legs[0].segments[0],
+          from: "office",
+          to: "loc",
           distance: 0,
-          durationSeconds: 0,
-          endTimeSeconds: 0,
         }],
       }],
-    };
+    }, 60);
     const snapshot = getSimulationSnapshotAtTime(zeroDuration, 0);
     expect(projectSimulationMarkerTo3D(
       graph,
@@ -119,13 +111,11 @@ describe("warehouse 3D projection", () => {
   });
 
   test("renders a start-only route at the office", () => {
-    const startOnly: RouteTimeline = {
+    const startOnly = buildRouteTimeline({
       order: ["office"],
-      walkingSpeedMetersPerMinute: 60,
       legs: [],
       totalDistance: 0,
-      totalDurationSeconds: 0,
-    };
+    }, 60);
     const transform = createWarehouse3DTransform(graph);
     expect(projectSimulationMarkerTo3D(
       graph,
@@ -179,22 +169,49 @@ describe("warehouse 3D projection", () => {
     expect(snapshot.isComplete).toBe(false);
   });
 
+  test("SVG and 3D hold the same destination during service", () => {
+    const servicedTimeline = buildRouteTimeline(
+      {
+        order: ["office", "loc"],
+        totalDistance: 10,
+        legs: [{
+          from: "office",
+          to: "loc",
+          path: ["office", "loc"],
+          distance: 10,
+          segments: [{ from: "office", to: "loc", distance: 10 }],
+        }],
+      },
+      60,
+      new Map([["loc", {
+        locationId: "loc",
+        serviceClass: "standard" as const,
+        durationSeconds: 20,
+        source: "synthetic-demo" as const,
+      }]]),
+    );
+    const snapshot = getSimulationSnapshotAtTime(servicedTimeline, 15);
+    const transform = createWarehouse3DTransform(graph);
+
+    expect(snapshot.current).toMatchObject({ kind: "service", locationId: "loc", progress: 0.25 });
+    expect(projectSimulationMarkerToSvg(graph, servicedTimeline, snapshot)).toEqual({ x: 10, y: 20 });
+    expect(projectSimulationMarkerTo3D(graph, servicedTimeline, snapshot, transform))
+      .toEqual(projectNodeToWarehouse3D(graph, "loc", transform));
+  });
+
   test("projects active and completed route markers from one shared comparison time", () => {
     const workerTimeline = timeline;
-    const recommendedTimeline: RouteTimeline = {
-      ...timeline,
-      totalDurationSeconds: 6,
+    const recommendedTimeline = buildRouteTimeline({
+      order: ["office", "loc"],
+      totalDistance: 6,
       legs: [{
-        ...timeline.legs[0],
-        durationSeconds: 6,
-        endTimeSeconds: 6,
-        segments: [{
-          ...timeline.legs[0].segments[0],
-          durationSeconds: 6,
-          endTimeSeconds: 6,
-        }],
+        from: "office",
+        to: "loc",
+        path: ["office", "loc"],
+        distance: 6,
+        segments: [{ from: "office", to: "loc", distance: 6 }],
       }],
-    };
+    }, 60);
     const sharedTime = 8;
     const workerSnapshot = getSimulationSnapshotAtTime(workerTimeline, sharedTime);
     const recommendedSnapshot = getSimulationSnapshotAtTime(recommendedTimeline, sharedTime);

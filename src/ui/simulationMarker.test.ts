@@ -43,8 +43,11 @@ const activeTimeline: RouteTimeline = {
   order: ["from", "to"],
   walkingSpeedMetersPerMinute: 60,
   totalDistance: 999,
+  walkingDurationSeconds: 999,
+  serviceDurationSeconds: 0,
   totalDurationSeconds: 999,
   legs: [],
+  phases: [],
 };
 
 function snapshot(progress: number): Snapshot {
@@ -58,6 +61,7 @@ function snapshot(progress: number): Snapshot {
     completedLegCount: 0,
     completedDestinationIds: [],
     current: {
+      kind: "travel",
       legIndex: 0,
       segmentIndex: 0,
       from: "from",
@@ -116,6 +120,28 @@ describe("projectSimulationMarkerToSvg", () => {
     }).toEqual(originalMetrics);
   });
 
+  test("holds a service activity exactly at its destination", () => {
+    const serviceSnapshot: Snapshot = {
+      ...snapshot(1),
+      current: {
+        kind: "service",
+        legIndex: 0,
+        locationId: "destination",
+        serviceClass: "standard",
+        progress: 0.5,
+        elapsedSeconds: 17.5,
+        durationSeconds: 35,
+        remainingSeconds: 17.5,
+      },
+    };
+    const timeline = { ...activeTimeline, order: ["start", "destination"] };
+
+    expect(projectSimulationMarkerToSvg(graph, timeline, serviceSnapshot)).toEqual({
+      x: 50,
+      y: 60,
+    });
+  });
+
   test("a completed route leaves the marker at the final route node", () => {
     const timeline = { ...activeTimeline, order: ["start", "destination"] };
     expect(projectSimulationMarkerToSvg(graph, timeline, completedSnapshot(24))).toEqual({
@@ -129,7 +155,10 @@ describe("projectSimulationMarkerToSvg", () => {
       order: ["start", "destination"],
       walkingSpeedMetersPerMinute: 60,
       legs: [],
+      phases: [],
       totalDistance: 0,
+      walkingDurationSeconds: 0,
+      serviceDurationSeconds: 0,
       totalDurationSeconds: 0,
     };
     expect(projectSimulationMarkerToSvg(graph, timeline, completedSnapshot())).toEqual({
@@ -143,7 +172,10 @@ describe("projectSimulationMarkerToSvg", () => {
       order: ["start"],
       walkingSpeedMetersPerMinute: 60,
       legs: [],
+      phases: [],
       totalDistance: 0,
+      walkingDurationSeconds: 0,
+      serviceDurationSeconds: 0,
       totalDurationSeconds: 0,
     };
     expect(projectSimulationMarkerToSvg(graph, timeline, completedSnapshot())).toEqual({

@@ -116,6 +116,37 @@ export interface RouteTimelineSegment {
   readonly endTimeSeconds: number;
 }
 
+export type CountServiceClass = "simple" | "standard" | "complex";
+
+/** One deterministic count-time input. It is simulation workload, never routing cost. */
+export interface CountServiceProfile {
+  readonly locationId: NodeId;
+  readonly serviceClass: CountServiceClass;
+  readonly durationSeconds: number;
+  readonly source: "synthetic-demo";
+}
+
+/** One distance-bearing travel interval on the physical simulation axis. */
+export interface RouteTimelineTravelPhase extends RouteTimelineSegment {
+  readonly kind: "travel";
+  readonly legIndex: number;
+  readonly segmentIndex: number;
+}
+
+/** One stationary cycle-count interval after arrival at a destination. */
+export interface RouteTimelineServicePhase {
+  readonly kind: "service";
+  readonly legIndex: number;
+  readonly locationId: NodeId;
+  readonly serviceClass: CountServiceClass | null;
+  readonly source: "synthetic-demo" | null;
+  readonly startTimeSeconds: number;
+  readonly durationSeconds: number;
+  readonly endTimeSeconds: number;
+}
+
+export type RouteTimelinePhase = RouteTimelineTravelPhase | RouteTimelineServicePhase;
+
 /** Consecutive timeline segments belonging to one visit-to-visit leg. */
 export interface RouteTimelineLeg {
   readonly from: NodeId;
@@ -127,12 +158,15 @@ export interface RouteTimelineLeg {
   readonly segments: readonly RouteTimelineSegment[];
 }
 
-/** A walking-only temporal projection of a completed RouteTraversal. */
+/** Travel plus stationary counting work projected onto one physical time axis. */
 export interface RouteTimeline {
   readonly order: readonly NodeId[];
   readonly walkingSpeedMetersPerMinute: number;
   readonly legs: readonly RouteTimelineLeg[];
+  readonly phases: readonly RouteTimelinePhase[];
   readonly totalDistance: number;
+  readonly walkingDurationSeconds: number;
+  readonly serviceDurationSeconds: number;
   readonly totalDurationSeconds: number;
 }
 

@@ -1,5 +1,5 @@
 import type { RouteTimeline } from "../domain/types";
-import type { SimulationSegmentCursor, SimulationSnapshot } from "./types";
+import type { SimulationActivityCursor, SimulationSnapshot } from "./types";
 
 /** Absolute time tolerance used only to absorb floating-point boundary noise. */
 export const SIMULATION_TIME_EPSILON = 1e-9;
@@ -21,8 +21,8 @@ function clampUnitInterval(value: number): number {
 
 /**
  * Returns the complete simulation truth at one time without retaining or
- * mutating incremental state. Positive-duration segments use [start, end);
- * zero-duration segments are completed at their boundary and never current.
+ * mutating incremental state. Positive-duration phases use [start, end);
+ * zero-duration travel/service is completed at its boundary and never current.
  */
 export function getSimulationSnapshotAtTime(
   timeline: RouteTimeline,
@@ -34,42 +34,62 @@ export function getSimulationSnapshotAtTime(
 
   const effectiveTime = Math.min(requestedTimeSeconds, timeline.totalDurationSeconds);
   const isComplete = atOrAfter(effectiveTime, timeline.totalDurationSeconds);
-  const completedDestinationIds = timeline.legs
-    .filter((leg) => atOrAfter(effectiveTime, leg.endTimeSeconds))
-    .map((leg) => leg.to);
+  const completedDestinationIds = timeline.phases.flatMap((phase) => (
+    phase.kind === "service" && atOrAfter(effectiveTime, phase.endTimeSeconds)
+      ? [phase.locationId]
+      : []
+  ));
 
-  let current: SimulationSegmentCursor | null = null;
+  let current: SimulationActivityCursor | null = null;
   let distanceTraveled = 0;
 
-  for (let legIndex = 0; legIndex < timeline.legs.length; legIndex++) {
-    const leg = timeline.legs[legIndex];
-    for (let segmentIndex = 0; segmentIndex < leg.segments.length; segmentIndex++) {
-      const segment = leg.segments[segmentIndex];
-      const isZeroDuration = segment.durationSeconds <= SIMULATION_TIME_EPSILON;
-      const segmentComplete = atOrAfter(effectiveTime, segment.endTimeSeconds);
+  for (const phase of timeline.phases) {
+    const isZeroDuration = phase.durationSeconds <= SIMULATION_TIME_EPSILON;
+    const phaseComplete = atOrAfter(effectiveTime, phase.endTimeSeconds);
 
-      if (isComplete || segmentComplete) {
-        distanceTraveled += segment.distance;
+    if (phase.kind === "travel") {
+      if (isComplete || phaseComplete) {
+        distanceTraveled += phase.distance;
         continue;
       }
 
-      const hasStarted = atOrAfter(effectiveTime, segment.startTimeSeconds);
+      const hasStarted = atOrAfter(effectiveTime, phase.startTimeSeconds);
       if (!isZeroDuration && hasStarted && current === null) {
         const progress = clampUnitInterval(
-          (effectiveTime - segment.startTimeSeconds) / segment.durationSeconds,
+          (effectiveTime - phase.startTimeSeconds) / phase.durationSeconds,
         );
-        const distanceTraveledOnSegment = segment.distance * progress;
+        const distanceTraveledOnSegment = phase.distance * progress;
         current = {
-          legIndex,
-          segmentIndex,
-          from: segment.from,
-          to: segment.to,
+          kind: "travel",
+          legIndex: phase.legIndex,
+          segmentIndex: phase.segmentIndex,
+          from: phase.from,
+          to: phase.to,
           progress,
           distanceTraveledOnSegment,
-          distanceRemainingOnSegment: Math.max(0, segment.distance - distanceTraveledOnSegment),
+          distanceRemainingOnSegment: Math.max(0, phase.distance - distanceTraveledOnSegment),
         };
         distanceTraveled += distanceTraveledOnSegment;
       }
+      continue;
+    }
+
+    const hasStarted = atOrAfter(effectiveTime, phase.startTimeSeconds);
+    if (!isComplete && !isZeroDuration && !phaseComplete && hasStarted && current === null) {
+      const elapsedSeconds = Math.min(
+        phase.durationSeconds,
+        Math.max(0, effectiveTime - phase.startTimeSeconds),
+      );
+      current = {
+        kind: "service",
+        legIndex: phase.legIndex,
+        locationId: phase.locationId,
+        serviceClass: phase.serviceClass,
+        progress: clampUnitInterval(elapsedSeconds / phase.durationSeconds),
+        elapsedSeconds,
+        durationSeconds: phase.durationSeconds,
+        remainingSeconds: Math.max(0, phase.durationSeconds - elapsedSeconds),
+      };
     }
   }
 

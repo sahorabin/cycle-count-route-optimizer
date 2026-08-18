@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { largeWarehouse } from "./data/largeWarehouse";
+import { buildDemoCountServiceProfiles } from "./data/demoCountService";
 import { buildValidatedDistanceMatrix } from "./domain/distanceMatrix";
 import type { DistanceMatrixResult } from "./domain/distanceMatrix";
 import { nearestNeighborRoute } from "./domain/nearestNeighbor";
@@ -24,6 +25,9 @@ import { RouteSimulationComparison } from "./components/RouteSimulationCompariso
 import "./App.css";
 
 const KNOWN_LOCATION_IDS = new Set(largeWarehouse.locations.map((l) => l.id));
+const DEMO_COUNT_SERVICE_PROFILES = buildDemoCountServiceProfiles(
+  largeWarehouse.locations.map((location) => location.id),
+);
 
 /** Cross-checks persisted ids against the current 100-location fixture -- an id from a since-removed/renamed location must never resurrect as "completed", "selected", or part of the manual route. */
 function sanitizeKnownIds(ids: string[]): NodeId[] {
@@ -218,11 +222,19 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
     return {
       worker: {
         route: manualComputation,
-        timeline: buildRouteTimeline(workerTraversal, walkingSpeed),
+        timeline: buildRouteTimeline(
+          workerTraversal,
+          walkingSpeed,
+          DEMO_COUNT_SERVICE_PROFILES,
+        ),
       },
       recommended: {
         route: recommendedComputation,
-        timeline: buildRouteTimeline(recommendedTraversal, walkingSpeed),
+        timeline: buildRouteTimeline(
+          recommendedTraversal,
+          walkingSpeed,
+          DEMO_COUNT_SERVICE_PROFILES,
+        ),
       },
     };
   }, [manualComputation, manualRouteData, recommendedComputation, walkingSpeed]);

@@ -94,6 +94,9 @@ export function projectSimulationMarkerTo3D(
   transform: Warehouse3DTransform,
 ): WorldPoint {
   if (snapshot.current) {
+    if (snapshot.current.kind === "service") {
+      return projectNodeToWarehouse3D(graph, snapshot.current.locationId, transform);
+    }
     const from = projectNodeToWarehouse3D(graph, snapshot.current.from, transform);
     const to = projectNodeToWarehouse3D(graph, snapshot.current.to, transform);
     return {

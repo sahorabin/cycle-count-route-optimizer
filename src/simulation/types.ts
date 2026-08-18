@@ -1,7 +1,8 @@
-import type { NodeId } from "../domain/types";
+import type { CountServiceClass, NodeId } from "../domain/types";
 
 /** Renderer-independent cursor within the active positive-duration segment. */
 export interface SimulationSegmentCursor {
+  readonly kind: "travel";
   readonly legIndex: number;
   readonly segmentIndex: number;
   readonly from: NodeId;
@@ -10,6 +11,20 @@ export interface SimulationSegmentCursor {
   readonly distanceTraveledOnSegment: number;
   readonly distanceRemainingOnSegment: number;
 }
+
+/** Renderer-independent cursor within active stationary count work. */
+export interface SimulationServiceCursor {
+  readonly kind: "service";
+  readonly legIndex: number;
+  readonly locationId: NodeId;
+  readonly serviceClass: CountServiceClass | null;
+  readonly progress: number;
+  readonly elapsedSeconds: number;
+  readonly durationSeconds: number;
+  readonly remainingSeconds: number;
+}
+
+export type SimulationActivityCursor = SimulationSegmentCursor | SimulationServiceCursor;
 
 /** Deterministic projection of a RouteTimeline at one effective simulation time. */
 export interface SimulationSnapshot {
@@ -21,7 +36,7 @@ export interface SimulationSnapshot {
   readonly distanceRemaining: number;
   readonly completedLegCount: number;
   readonly completedDestinationIds: readonly NodeId[];
-  readonly current: SimulationSegmentCursor | null;
+  readonly current: SimulationActivityCursor | null;
 }
 
 /** Pure wall-clock playback control; independent of physical walking speed. */

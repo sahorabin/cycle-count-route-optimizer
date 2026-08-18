@@ -27,6 +27,9 @@ export function projectSimulationMarkerToSvg(
   const coordinates = buildCoordinateLookup(graph);
 
   if (snapshot.current) {
+    if (snapshot.current.kind === "service") {
+      return requireCoordinate(coordinates, snapshot.current.locationId);
+    }
     const from = requireCoordinate(coordinates, snapshot.current.from);
     const to = requireCoordinate(coordinates, snapshot.current.to);
     const progress = snapshot.current.progress;

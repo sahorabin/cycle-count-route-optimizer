@@ -96,7 +96,7 @@ export function createWarehouseWorkerPose(
   transform: Warehouse3DTransform,
 ): WarehouseWorkerPose {
   const position = projectSimulationMarkerTo3D(graph, timeline, snapshot, transform);
-  if (snapshot.current) {
+  if (snapshot.current?.kind === "travel") {
     const from = projectNodeToWarehouse3D(graph, snapshot.current.from, transform);
     const to = projectNodeToWarehouse3D(graph, snapshot.current.to, transform);
     return {
@@ -106,7 +106,10 @@ export function createWarehouseWorkerPose(
     };
   }
 
-  const finalSegment = timeline.legs.at(-1)?.segments.at(-1);
+  const facingLeg = snapshot.current?.kind === "service"
+    ? timeline.legs[snapshot.current.legIndex]
+    : timeline.legs.at(-1);
+  const finalSegment = facingLeg?.segments.at(-1);
   if (finalSegment) {
     const from = projectNodeToWarehouse3D(graph, finalSegment.from, transform);
     const to = projectNodeToWarehouse3D(graph, finalSegment.to, transform);

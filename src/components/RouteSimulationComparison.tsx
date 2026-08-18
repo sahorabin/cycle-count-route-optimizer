@@ -81,6 +81,8 @@ export function RouteSimulationComparison({
     recommended.route.order.join(">"),
     worker.timeline.totalDistance,
     recommended.timeline.totalDistance,
+    worker.timeline.serviceDurationSeconds,
+    recommended.timeline.serviceDurationSeconds,
   ].join("|");
   const playback = useSimulationPlayback(sharedDurationSeconds, physicalInputKey);
   const snapshots = useMemo(

@@ -6,6 +6,7 @@ import { OrthographicCamera } from "three";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { sampleWarehouse } from "../data/sampleWarehouse";
 import type { RouteTimeline } from "../domain/types";
+import { buildRouteTimeline } from "../domain/routeTimeline";
 import { getSimulationSnapshotAtTime } from "../simulation/simulationSnapshot";
 
 const { recordCanvasProps } = vi.hoisted(() => ({ recordCanvasProps: vi.fn() }));
@@ -49,33 +50,27 @@ import {
   WAREHOUSE_3D_VISUALS,
 } from "../ui/warehouse3dVisuals";
 
-const timeline: RouteTimeline = {
+const timeline: RouteTimeline = buildRouteTimeline({
   order: [sampleWarehouse.start.id],
-  walkingSpeedMetersPerMinute: 60,
   legs: [],
   totalDistance: 0,
-  totalDurationSeconds: 0,
-};
+}, 60);
 
-const routedTimeline: RouteTimeline = {
+const routedTimeline: RouteTimeline = buildRouteTimeline({
   order: ["office", "loc-D"],
-  walkingSpeedMetersPerMinute: 60,
   totalDistance: 30,
-  totalDurationSeconds: 30,
   legs: [{
     from: "office",
     to: "loc-D",
+    path: ["office", "F1", "F2", "loc-D"],
     distance: 30,
-    startTimeSeconds: 0,
-    durationSeconds: 30,
-    endTimeSeconds: 30,
     segments: [
-      { from: "office", to: "F1", distance: 8, startTimeSeconds: 0, durationSeconds: 8, endTimeSeconds: 8 },
-      { from: "F1", to: "F2", distance: 20, startTimeSeconds: 8, durationSeconds: 20, endTimeSeconds: 28 },
-      { from: "F2", to: "loc-D", distance: 2, startTimeSeconds: 28, durationSeconds: 2, endTimeSeconds: 30 },
+      { from: "office", to: "F1", distance: 8 },
+      { from: "F1", to: "F2", distance: 20 },
+      { from: "F2", to: "loc-D", distance: 2 },
     ],
   }],
-};
+}, 60);
 
 afterEach(() => {
   vi.unstubAllGlobals();

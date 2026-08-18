@@ -101,6 +101,9 @@ export function RouteSimulationViewport({
     inProgress: t("replay.status.inProgress"),
     completed: t("replay.status.completed"),
   }[status];
+  const serviceClassLabel = snapshot.current?.kind === "service" && snapshot.current.serviceClass
+    ? t(`replay.serviceClass.${snapshot.current.serviceClass}`)
+    : null;
   const warehouseMap = (
     <WarehouseMap
       graph={graph}
@@ -162,6 +165,28 @@ export function RouteSimulationViewport({
         </Suspense>
       ) : warehouseMap}
 
+      <div
+        className="route-simulation-viewport__activity"
+        data-simulation-activity={snapshot.current?.kind ?? (snapshot.isComplete ? "complete" : "idle")}
+        data-service-location={snapshot.current?.kind === "service" ? snapshot.current.locationId : undefined}
+        data-service-progress={snapshot.current?.kind === "service" ? snapshot.current.progress : undefined}
+      >
+        <span>{t("replay.currentActivity")}</span>
+        <strong>
+          {snapshot.current?.kind === "service"
+            ? `${t("replay.activity.service")}${serviceClassLabel ? ` · ${serviceClassLabel}` : ""}`
+            : snapshot.isComplete
+              ? t("replay.status.completed")
+              : t("replay.activity.travel")}
+        </strong>
+        {snapshot.current?.kind === "service" ? (
+          <small>
+            {formatReplayTime(snapshot.current.elapsedSeconds)} /{" "}
+            {formatReplayTime(snapshot.current.durationSeconds)}
+          </small>
+        ) : null}
+      </div>
+
       <div className="route-simulation-viewport__stats" aria-label={t("replay.kpis")}>
         <div>
           <span>{t("replay.distance")}</span>
@@ -176,11 +201,27 @@ export function RouteSimulationViewport({
             {snapshot.completedDestinationIds.length} / {destinationCount}
           </strong>
         </div>
+      </div>
+      <div
+        className="route-simulation-viewport__time-breakdown"
+        aria-label={t("replay.physicalTimeBreakdown")}
+      >
         <div>
-          <span>{t("replay.routeDuration")}</span>
+          <span>{t("replay.travelTime")}</span>
+          <strong>{formatReplayTime(input.timeline.walkingDurationSeconds)}</strong>
+        </div>
+        <div>
+          <span>{t("replay.serviceTime")}</span>
+          <strong>{formatReplayTime(input.timeline.serviceDurationSeconds)}</strong>
+        </div>
+        <div>
+          <span>{t("replay.totalPhysicalTime")}</span>
           <strong>{formatReplayTime(input.timeline.totalDurationSeconds)}</strong>
         </div>
       </div>
+      <p className="route-simulation-viewport__service-disclosure">
+        {t("replay.syntheticServiceDisclosure")}
+      </p>
     </article>
   );
 }

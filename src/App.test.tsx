@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, test, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { getDemoCountServiceProfile } from "./data/demoCountService";
 import App from "./App";
 
 beforeEach(() => {
@@ -139,6 +140,8 @@ describe("App (Phase 5 dashboard)", () => {
 
     const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
     const originalDuration = Number(seek.max);
+    const controlledServiceDuration = getDemoCountServiceProfile("loc-A01").durationSeconds
+      + getDemoCountServiceProfile("loc-B03").durationSeconds;
     fireEvent.click(screen.getByRole("button", { name: "10×" }));
     fireEvent.change(seek, { target: { value: originalDuration / 2 } });
     fireEvent.change(screen.getByLabelText("Walking speed (metres/minute)"), {
@@ -146,7 +149,9 @@ describe("App (Phase 5 dashboard)", () => {
     });
 
     expect(seek.value).toBe("0");
-    expect(Number(seek.max)).toBeCloseTo(originalDuration * 2);
+    expect(Number(seek.max)).toBeCloseTo(
+      (originalDuration - controlledServiceDuration) * 2 + controlledServiceDuration,
+    );
     expect(screen.getByRole("button", { name: "10×" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
 

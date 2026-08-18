@@ -2,6 +2,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { sampleWarehouse } from "../data/sampleWarehouse";
+import { buildDemoCountServiceProfiles } from "../data/demoCountService";
 import { buildValidatedDistanceMatrix } from "../domain/distanceMatrix";
 import { nearestNeighborRoute } from "../domain/nearestNeighbor";
 import { buildRouteTimeline } from "../domain/routeTimeline";
@@ -23,7 +24,32 @@ function linearTimeline(totalDurationSeconds: number): RouteTimeline {
     order: ["start", "destination"],
     walkingSpeedMetersPerMinute: 60,
     totalDistance: totalDurationSeconds,
+    walkingDurationSeconds: totalDurationSeconds,
+    serviceDurationSeconds: 0,
     totalDurationSeconds,
+    phases: [
+      {
+        kind: "travel",
+        legIndex: 0,
+        segmentIndex: 0,
+        from: "start",
+        to: "destination",
+        distance: totalDurationSeconds,
+        startTimeSeconds: 0,
+        durationSeconds: totalDurationSeconds,
+        endTimeSeconds: totalDurationSeconds,
+      },
+      {
+        kind: "service",
+        legIndex: 0,
+        locationId: "destination",
+        serviceClass: null,
+        source: null,
+        startTimeSeconds: totalDurationSeconds,
+        durationSeconds: 0,
+        endTimeSeconds: totalDurationSeconds,
+      },
+    ],
     legs: [
       {
         from: "start",
@@ -65,10 +91,16 @@ function setupComparison(language: "ko" | "en" = "en") {
   };
   const nearest = nearestNeighborRoute(routeGraph, targetIds);
   const recommended = twoOptRoute(routeGraph, targetIds, nearest);
-  const workerTimeline = buildRouteTimeline(buildRouteTraversal(routeGraph, worker, matrix), 60);
+  const serviceProfiles = buildDemoCountServiceProfiles(targetIds);
+  const workerTimeline = buildRouteTimeline(
+    buildRouteTraversal(routeGraph, worker, matrix),
+    60,
+    serviceProfiles,
+  );
   const recommendedTimeline = buildRouteTimeline(
     buildRouteTraversal(routeGraph, recommended, matrix),
     60,
+    serviceProfiles,
   );
 
   const rendered = render(
@@ -254,6 +286,34 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getByRole("button", { name: "5×" }).getAttribute("aria-pressed")).toBe("true");
   });
 
+  test("preserves active service truth across 3D and 2D renderer remounts", () => {
+    const { container, workerTimeline } = setupComparison();
+    const service = workerTimeline.phases.find(
+      (phase) => phase.kind === "service" && phase.durationSeconds > 0,
+    );
+    if (!service || service.kind !== "service") throw new Error("Expected service phase");
+    const serviceMidpoint = service.startTimeSeconds + service.durationSeconds / 2;
+    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+    fireEvent.change(seek, { target: { value: serviceMidpoint } });
+    fireEvent.click(screen.getByRole("button", { name: "5×" }));
+
+    const workerActivity = () => container.querySelector(
+      '[data-simulation-viewport="worker"] [data-simulation-activity]',
+    );
+    expect(workerActivity()?.getAttribute("data-simulation-activity")).toBe("service");
+    expect(workerActivity()?.getAttribute("data-service-location")).toBe(service.locationId);
+    expect(Number(workerActivity()?.getAttribute("data-service-progress"))).toBeCloseTo(0.5);
+
+    fireEvent.click(screen.getByRole("button", { name: "2D" }));
+    fireEvent.click(screen.getByRole("button", { name: "3D" }));
+
+    expect(Number(seek.value)).toBe(serviceMidpoint);
+    expect(workerActivity()?.getAttribute("data-simulation-activity")).toBe("service");
+    expect(workerActivity()?.getAttribute("data-service-location")).toBe(service.locationId);
+    expect(Number(workerActivity()?.getAttribute("data-service-progress"))).toBeCloseTo(0.5);
+    expect(screen.getByRole("button", { name: "5×" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
   test("switches both renderers without resetting shared time, playback state, rate, or snapshots", () => {
     const frames = installAnimationFrameHarness();
     const { container, workerTimeline, recommendedTimeline } = setupComparison();
@@ -416,12 +476,25 @@ describe("RouteSimulationComparison", () => {
 
   test("shows route-specific duration and KPI truth without changing it at 10x", () => {
     const { workerTimeline, recommendedTimeline } = setupComparison();
-    expect(screen.getAllByText("Route duration")).toHaveLength(2);
+    expect(screen.getAllByText("Travel")).toHaveLength(2);
+    expect(screen.getAllByText("Counting")).toHaveLength(2);
+    expect(screen.getAllByText("Total")).toHaveLength(2);
+    expect(screen.getAllByText("Counting times use deterministic synthetic demo assumptions."))
+      .toHaveLength(2);
     expect(screen.getAllByText("0 / 4")).toHaveLength(2);
+    expect(workerTimeline.serviceDurationSeconds).toBe(recommendedTimeline.serviceDurationSeconds);
+    const physicalTotals = [
+      workerTimeline.totalDurationSeconds,
+      recommendedTimeline.totalDurationSeconds,
+    ];
 
     fireEvent.click(screen.getByRole("button", { name: "10×" }));
     expect(workerTimeline.walkingSpeedMetersPerMinute).toBe(60);
     expect(recommendedTimeline.walkingSpeedMetersPerMinute).toBe(60);
+    expect([
+      workerTimeline.totalDurationSeconds,
+      recommendedTimeline.totalDurationSeconds,
+    ]).toEqual(physicalTotals);
     for (const label of ["0.5×", "1×", "2×", "5×", "10×"]) {
       expect(screen.getByRole("button", { name: label })).toBeTruthy();
     }
@@ -436,6 +509,11 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getByRole("group", { name: "보기 방식" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "카메라" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "카메라 초기화" })).toBeTruthy();
+    expect(screen.getAllByText("이동")).toHaveLength(2);
+    expect(screen.getAllByText("재고 조사")).toHaveLength(2);
+    expect(screen.getAllByText("총 운영 시간")).toHaveLength(2);
+    expect(screen.getAllByText("재고 조사 시간은 결정론적 합성 데모 가정을 사용합니다."))
+      .toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "탐색" }));
     expect(screen.getByRole("group", { name: "탐색할 경로" })).toBeTruthy();
   });

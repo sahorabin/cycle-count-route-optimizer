@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { sampleWarehouse } from "../data/sampleWarehouse";
+import { buildDemoCountServiceProfiles } from "../data/demoCountService";
 import { compareManualToRecommended } from "../ui/manualComparison";
 import { buildValidatedDistanceMatrix } from "./distanceMatrix";
 import { nearestNeighborRoute } from "./nearestNeighbor";
@@ -13,6 +14,7 @@ import { twoOptRoute } from "./twoOpt";
 import type {
   NodeId,
   RouteComputation,
+  CountServiceProfile,
   RouteTraversal,
   RouteTraversalLeg,
   WarehouseGraph,
@@ -84,6 +86,17 @@ function allSegments(timeline: ReturnType<typeof buildRouteTimeline>) {
   return timeline.legs.flatMap((leg) => leg.segments);
 }
 
+function serviceProfiles(
+  entries: Array<[NodeId, number]>,
+): ReadonlyMap<NodeId, CountServiceProfile> {
+  return new Map(entries.map(([locationId, durationSeconds]) => [locationId, {
+    locationId,
+    serviceClass: "standard" as const,
+    durationSeconds,
+    source: "synthetic-demo" as const,
+  }]));
+}
+
 describe("buildRouteTimeline", () => {
   test("builds a one-leg timeline with exact segment timing at 60 metres per minute", () => {
     const timeline = buildRouteTimeline(oneLegTraversal(), 60);
@@ -109,6 +122,8 @@ describe("buildRouteTimeline", () => {
       },
     ]);
     expect(timeline.totalDurationSeconds).toBe(60);
+    expect(timeline.walkingDurationSeconds).toBe(60);
+    expect(timeline.serviceDurationSeconds).toBe(0);
   });
 
   test("preserves multi-leg order, segment order, distances, and counts", () => {
@@ -156,9 +171,100 @@ describe("buildRouteTimeline", () => {
       order: ["office"],
       walkingSpeedMetersPerMinute: 60,
       legs: [],
+      phases: [],
       totalDistance: 0,
+      walkingDurationSeconds: 0,
+      serviceDurationSeconds: 0,
       totalDurationSeconds: 0,
     });
+  });
+
+  test("orders travel segments and service phases on one physical time axis", () => {
+    const timeline = buildRouteTimeline(
+      multiLegTraversal,
+      60,
+      serviceProfiles([["A", 20], ["B", 35]]),
+    );
+
+    expect(timeline.phases.map((phase) => (
+      phase.kind === "travel" ? `travel:${phase.from}-${phase.to}` : `service:${phase.locationId}`
+    ))).toEqual([
+      "travel:office-F1",
+      "travel:F1-A",
+      "service:A",
+      "travel:A-F1",
+      "travel:F1-F2",
+      "travel:F2-B",
+      "service:B",
+    ]);
+    expect(timeline.legs[0].endTimeSeconds).toBe(30);
+    expect(timeline.legs[1].startTimeSeconds).toBe(50);
+    expect(timeline.phases.at(-1)?.endTimeSeconds).toBe(145);
+  });
+
+  test("separates walking, service, total duration, and travel-only distance", () => {
+    const timeline = buildRouteTimeline(
+      multiLegTraversal,
+      60,
+      serviceProfiles([["A", 20], ["B", 35]]),
+    );
+    const travelTotal = timeline.phases
+      .filter((phase) => phase.kind === "travel")
+      .reduce((sum, phase) => sum + phase.durationSeconds, 0);
+    const serviceTotal = timeline.phases
+      .filter((phase) => phase.kind === "service")
+      .reduce((sum, phase) => sum + phase.durationSeconds, 0);
+
+    expect(travelTotal).toBeCloseTo(timeline.walkingDurationSeconds, 12);
+    expect(serviceTotal).toBe(timeline.serviceDurationSeconds);
+    expect(timeline.walkingDurationSeconds).toBe(90);
+    expect(timeline.serviceDurationSeconds).toBe(55);
+    expect(timeline.totalDurationSeconds).toBe(145);
+    expect(timeline.totalDistance).toBe(90);
+  });
+
+  test("keeps zero-duration service explicit without adding a temporal gap", () => {
+    const timeline = buildRouteTimeline(
+      multiLegTraversal,
+      60,
+      serviceProfiles([["A", 0], ["B", 0]]),
+    );
+    const services = timeline.phases.filter((phase) => phase.kind === "service");
+
+    expect(services).toHaveLength(2);
+    expect(services.every((phase) => phase.startTimeSeconds === phase.endTimeSeconds)).toBe(true);
+    expect(timeline.legs[1].startTimeSeconds).toBe(timeline.legs[0].endTimeSeconds);
+    expect(timeline.totalDurationSeconds).toBe(timeline.walkingDurationSeconds);
+  });
+
+  test("rejects missing, mismatched, negative, and non-finite service data", () => {
+    expect(() => buildRouteTimeline(
+      multiLegTraversal,
+      60,
+      serviceProfiles([["A", 20]]),
+    )).toThrow('missing service profile for destination "B"');
+    expect(() => buildRouteTimeline(
+      oneLegTraversal(),
+      60,
+      new Map([["target", {
+        locationId: "other",
+        serviceClass: "simple",
+        durationSeconds: 20,
+        source: "synthetic-demo",
+      }]]),
+    )).toThrow("does not match destination");
+    for (const duration of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => buildRouteTimeline(
+        oneLegTraversal(),
+        60,
+        serviceProfiles([["target", duration]]),
+      )).toThrow("must be finite and non-negative");
+    }
+    expect(() => buildRouteTimeline(
+      multiLegTraversal,
+      60,
+      serviceProfiles([["A", Number.MAX_VALUE], ["B", Number.MAX_VALUE]]),
+    )).toThrow("must remain finite");
   });
 
   test("creates one continuous time axis across every segment and leg", () => {
@@ -254,17 +360,21 @@ describe("buildRouteTimeline", () => {
     const recommendedRoute = { order: ["office", "recommended"], totalDistance: 90 };
     const comparison = compareManualToRecommended(manualRoute, recommendedRoute, 60);
 
-    const manualTimeline = buildRouteTimeline(oneLegTraversal([120]), 60);
-    const recommendedTimeline = buildRouteTimeline(oneLegTraversal([90]), 60);
+    const services = serviceProfiles([["target", 35]]);
+    const manualTimeline = buildRouteTimeline(oneLegTraversal([120]), 60, services);
+    const recommendedTimeline = buildRouteTimeline(oneLegTraversal([90]), 60, services);
 
     expect(comparison.manualDurationMinutes * 60).toBeCloseTo(
-      manualTimeline.totalDurationSeconds,
+      manualTimeline.walkingDurationSeconds,
       12,
     );
     expect(comparison.recommendedDurationMinutes * 60).toBeCloseTo(
-      recommendedTimeline.totalDurationSeconds,
+      recommendedTimeline.walkingDurationSeconds,
       12,
     );
+    expect(manualTimeline.totalDurationSeconds).toBe(manualTimeline.walkingDurationSeconds + 35);
+    expect(recommendedTimeline.totalDurationSeconds)
+      .toBe(recommendedTimeline.walkingDurationSeconds + 35);
   });
 
   test("uses the same builder for worker and recommended traversals and preserves distance ordering", () => {
@@ -274,12 +384,27 @@ describe("buildRouteTimeline", () => {
     const workerRoute: RouteComputation = { order: workerOrder, totalDistance: 573 };
     const recommendedRoute = twoOptRoute(graph, targetIds, nearestNeighborRoute(graph, targetIds));
 
-    const workerTimeline = buildRouteTimeline(realTraversal(graph, workerRoute), 60);
-    const recommendedTimeline = buildRouteTimeline(realTraversal(graph, recommendedRoute), 60);
+    const services = buildDemoCountServiceProfiles(targetIds);
+    const workerTimeline = buildRouteTimeline(realTraversal(graph, workerRoute), 60, services);
+    const recommendedTimeline = buildRouteTimeline(
+      realTraversal(graph, recommendedRoute),
+      60,
+      services,
+    );
 
     expect(workerTimeline.totalDistance).toBeGreaterThan(recommendedTimeline.totalDistance);
+    expect(workerTimeline.serviceDurationSeconds).toBe(recommendedTimeline.serviceDurationSeconds);
+    expect(workerTimeline.walkingDurationSeconds).toBeGreaterThan(
+      recommendedTimeline.walkingDurationSeconds,
+    );
     expect(workerTimeline.totalDurationSeconds).toBeGreaterThan(
       recommendedTimeline.totalDurationSeconds,
+    );
+    expect(
+      workerTimeline.totalDurationSeconds - recommendedTimeline.totalDurationSeconds,
+    ).toBeCloseTo(
+      workerTimeline.walkingDurationSeconds - recommendedTimeline.walkingDurationSeconds,
+      12,
     );
   });
 
