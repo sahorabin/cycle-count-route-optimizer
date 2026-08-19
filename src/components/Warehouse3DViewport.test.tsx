@@ -131,6 +131,7 @@ describe("Warehouse3DViewport", () => {
           authority
           instanceId="strict-mode-camera"
           workerPoint={{ x: 0, y: 0, z: 0 }}
+        workerFacingYaw={0}
           onDetailLevelChange={vi.fn()}
         />
       </StrictMode>,

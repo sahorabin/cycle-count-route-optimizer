@@ -1,11 +1,17 @@
-import { BoxGeometry, Vector3 } from "three";
+import { BoxGeometry, Matrix4, Vector3 } from "three";
 import { describe, expect, test } from "vitest";
 import {
   clearWarehouseAssetCache,
   loadWarehouseAsset,
   normalizeAssetGeometryToUnitBox,
+  splitGeometryGroupsByHeight,
 } from "./warehouse3dAssetLoader";
 import { WAREHOUSE_3D_MATERIALS } from "./warehouse3dVisuals";
+import {
+  WAREHOUSE_OPERATOR_BONES,
+  WAREHOUSE_OPERATOR_CLIPS,
+  WAREHOUSE_REFERENCE_GAIT_BONES,
+} from "./warehouse3dWorker";
 import {
   getWarehouseAssetEntry,
   getWarehouseAssetLicenseReport,
@@ -488,5 +494,141 @@ describe("real worker asset", () => {
 
     // Compare renders two viewports; they must not fetch or parse twice.
     expect(loadWarehouseAsset("operator")).toBe(loadWarehouseAsset("operator"));
+  });
+});
+
+/** The rigged GLB's JSON chunk is ASCII, so clip and bone names survive a raw read. */
+const riggedText = import.meta.glob("/public/assets/worker/**/*.glb", {
+  eager: true,
+  query: "?raw",
+  import: "default",
+}) as Record<string, string>;
+
+describe("rigged operator asset", () => {
+  const RIGGED = "/public/assets/worker/quaternius_man_01/quaternius_man_01_rigged.glb";
+  const entry = getWarehouseAssetEntry("operator-rigged");
+  const glb = riggedText[RIGGED] ?? "";
+
+  test("registers the rigged human as the primary operator", () => {
+    expect(entry?.category).toBe("worker");
+    expect(entry?.file).toBe("/assets/worker/quaternius_man_01/quaternius_man_01_rigged.glb");
+    expect(hasWarehouseAssetFile("operator-rigged")).toBe(true);
+    // The static bake stays registered as the rung below it.
+    expect(hasWarehouseAssetFile("operator")).toBe(true);
+    expect(entry?.envelopeSpan).toBe(getWarehouseAssetEntry("operator")?.envelopeSpan);
+  });
+
+  test("ships the file and documents both derivatives of the one CC0 source", () => {
+    const licence = workerText["/public/assets/worker/quaternius_man_01/LICENSE.txt"];
+
+    expect(Object.keys(riggedText)).toContain(RIGGED);
+    expect(entry?.provenance.license).toBe("CC0");
+    expect(entry?.provenance.redistributable).toBe(true);
+    expect(entry?.provenance.source).toContain("poly.pizza");
+    expect(entry?.provenance.attribution).toContain("Quaternius");
+    expect(licence).toContain("quaternius_man_01_rigged.glb");
+    expect(licence).toMatch(/byte-for-byte/i);
+  });
+
+  test("carries the skeleton and the standing clip the renderer asks for", () => {
+    expect(glb.length).toBeGreaterThan(1000);
+    expect(glb).toContain(WAREHOUSE_OPERATOR_CLIPS.idle);
+    expect(WAREHOUSE_OPERATOR_CLIPS).not.toHaveProperty("walk");
+    // glTF node names carry dots; three strips them when it builds the
+    // skeleton, so the file says "MiddleHand.R" and the constant says
+    // "MiddleHandR". Both spellings are pinned here on purpose.
+    expect(glb).toContain("MiddleHand.R");
+    expect(WAREHOUSE_OPERATOR_BONES.hand).toBe("MiddleHand.R".replace(/\./g, ""));
+    expect(glb).toContain(`"${WAREHOUSE_OPERATOR_BONES.head}"`);
+    for (const bone of Object.values(WAREHOUSE_REFERENCE_GAIT_BONES)) {
+      const fileName = bone.replace(/([LR])$/, ".$1");
+      expect(glb).toContain(`"${fileName}"`);
+    }
+    // A rigged file, not the static bake: it declares a skin and animations.
+    expect(glb).toContain("skins");
+    expect(glb).toContain("animations");
+  });
+
+  test("carries no root translation track that could move the operator", () => {
+    // Locomotion would show up as a position track on the skeleton root or the
+    // hips. Neither bone has one; only the feet and torso translate locally.
+    const json = glb.slice(glb.indexOf("{"), glb.lastIndexOf("}") + 1);
+    for (const root of ["Bone", "Hips"]) {
+      expect({ root, path: json.includes(`"${root}.position"`) })
+        .toEqual({ root, path: false });
+    }
+  });
+
+  test("falls back through the ladder when the rigged operator cannot load", async () => {
+    clearWarehouseAssetCache();
+
+    // No fetch in node, so this exercises the real failure path.
+    const handle = await loadWarehouseAsset("operator-rigged");
+
+    expect(handle.status).not.toBe("ready");
+    expect(handle.animations).toEqual([]);
+    expect(handle.scene).toBeNull();
+    expect(handle.naturalSize).toBeNull();
+  });
+
+  test("loads the operator once however many viewports animate it", () => {
+    clearWarehouseAssetCache();
+
+    // Compare renders two skeletons; they must share one fetch and one parse.
+    expect(loadWarehouseAsset("operator-rigged")).toBe(loadWarehouseAsset("operator-rigged"));
+    expect(loadWarehouseAsset("operator-rigged")).not.toBe(loadWarehouseAsset("operator"));
+  });
+});
+
+describe("re-dressing imported geometry", () => {
+  const identity = new Matrix4();
+
+  test("splits a mesh into two material groups at a height fraction", () => {
+    const geometry = new BoxGeometry(1, 2, 1);
+
+    expect(splitGeometryGroupsByHeight(geometry, identity, 0.5)).toBe(true);
+    expect(geometry.groups).toHaveLength(2);
+    // Every triangle is still drawn exactly once: nothing added, nothing lost.
+    const drawn = geometry.groups.reduce((total, group) => total + group.count, 0);
+    expect(drawn).toBe(geometry.getIndex()?.count);
+    expect(geometry.groups.map((group) => group.materialIndex)).toEqual([0, 1]);
+    expect(geometry.groups[0].start).toBe(0);
+    expect(geometry.groups[1].start).toBe(geometry.groups[0].count);
+  });
+
+  test("moves no vertex, so skinning and weights survive", () => {
+    const geometry = new BoxGeometry(1, 2, 1);
+    const before = Array.from(geometry.getAttribute("position").array);
+
+    splitGeometryGroupsByHeight(geometry, identity, 0.4);
+
+    expect(Array.from(geometry.getAttribute("position").array)).toEqual(before);
+  });
+
+  test("declines to split when the cut would leave a group empty", () => {
+    for (const fraction of [0, 2, -0.5, Number.NaN]) {
+      expect({ fraction, split: splitGeometryGroupsByHeight(
+        new BoxGeometry(1, 2, 1), identity, fraction,
+      ) }).toEqual({ fraction, split: false });
+    }
+  });
+
+  test("measures the cut in world space, not in the file's own axes", () => {
+    // The shipped model is authored Z-up; the split has to follow the matrix,
+    // or a worker gets trousers across the chest.
+    const upright = new BoxGeometry(1, 2, 1);
+    const rotated = new BoxGeometry(1, 2, 1);
+    const lieDown = new Matrix4().makeRotationX(Math.PI / 2);
+
+    expect(splitGeometryGroupsByHeight(upright, identity, 0.4)).toBe(true);
+    expect(splitGeometryGroupsByHeight(rotated, lieDown, 0.4)).toBe(true);
+
+    const moved = (geometry: BoxGeometry) => {
+      const index = geometry.getIndex() as { getX: (i: number) => number };
+      const group = geometry.groups[1];
+      return Array.from({ length: group.count }, (_, i) => index.getX(group.start + i));
+    };
+    // Same triangle count by symmetry, but a different set of faces goes below.
+    expect(moved(rotated)).not.toEqual(moved(upright));
   });
 });

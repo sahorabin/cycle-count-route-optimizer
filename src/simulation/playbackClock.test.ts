@@ -1,4 +1,7 @@
 import { describe, expect, test } from "vitest";
+import { sampleWarehouse } from "../data/sampleWarehouse";
+import { buildRouteTimeline } from "../domain/routeTimeline";
+import { getSimulationSnapshotAtTime } from "./simulationSnapshot";
 import {
   advancePlaybackClock,
   createPlaybackClock,
@@ -178,5 +181,97 @@ describe("playbackClock", () => {
     expect(completed.timeSeconds).toBe(600);
     expect(completed.isPlaying).toBe(false);
     expect(timeline).toEqual({ totalDurationSeconds: 600, totalDistance: 600 });
+  });
+});
+
+describe("playback rate is replay speed, not walking speed", () => {
+  const timeline = buildRouteTimeline({
+    order: [sampleWarehouse.start.id, "loc-D"],
+    totalDistance: 30,
+    legs: [{
+      from: sampleWarehouse.start.id,
+      to: "loc-D",
+      path: [sampleWarehouse.start.id, "F1", "F2", "loc-D"],
+      distance: 30,
+      segments: [
+        { from: sampleWarehouse.start.id, to: "F1", distance: 10 },
+        { from: "F1", to: "F2", distance: 12 },
+        { from: "F2", to: "loc-D", distance: 8 },
+      ],
+    }],
+  }, 60);
+
+  const RATES = [0.5, 1, 2, 5, 10];
+  /** One second of wall clock, the same for every rate. */
+  const WALL_CLOCK_SECONDS = 1;
+
+  const afterOneSecond = (rate: number) => advancePlaybackClock(
+    { timeSeconds: 0, playbackRate: rate, isPlaying: true },
+    WALL_CLOCK_SECONDS,
+    timeline.totalDurationSeconds,
+  );
+
+  test("advances simulation time in proportion to the rate", () => {
+    for (const rate of RATES) {
+      expect({ rate, advanced: afterOneSecond(rate).timeSeconds })
+        .toEqual({ rate, advanced: WALL_CLOCK_SECONDS * rate });
+    }
+    // Twice the rate really is twice the progress, not a re-scaled route.
+    expect(afterOneSecond(10).timeSeconds / afterOneSecond(1).timeSeconds).toBe(10);
+    expect(afterOneSecond(0.5).timeSeconds / afterOneSecond(1).timeSeconds).toBe(0.5);
+  });
+
+  test("advances travelled distance in proportion to the rate", () => {
+    const travelled = RATES.map((rate) =>
+      getSimulationSnapshotAtTime(timeline, afterOneSecond(rate).timeSeconds).distanceTraveled);
+
+    // Strictly increasing with rate, because more simulated time has elapsed.
+    for (let i = 1; i < travelled.length; i += 1) {
+      expect({ rate: RATES[i], more: travelled[i] > travelled[i - 1] })
+        .toEqual({ rate: RATES[i], more: true });
+    }
+    // The worker still walks at one physical speed: distance tracks simulated
+    // time exactly, whatever wall-clock rate produced that time.
+    const speedMetersPerSecond = 60 / 60;
+    for (const [index, rate] of RATES.entries()) {
+      expect(travelled[index]).toBeCloseTo(WALL_CLOCK_SECONDS * rate * speedMetersPerSecond, 9);
+    }
+  });
+
+  test("never changes the route's own totals, whatever the rate", () => {
+    for (const rate of RATES) {
+      const clock = afterOneSecond(rate);
+      const snapshot = getSimulationSnapshotAtTime(timeline, clock.timeSeconds);
+
+      // The two figures a viewer reads as "the route": identical at every rate.
+      expect({ rate, total: snapshot.totalDistance }).toEqual({ rate, total: 30 });
+      expect({ rate, duration: timeline.totalDurationSeconds })
+        .toEqual({ rate, duration: timeline.totalDurationSeconds });
+      expect(snapshot.distanceTraveled + snapshot.distanceRemaining).toBeCloseTo(30, 9);
+    }
+    // Physical walking duration is a property of the route, not of playback.
+    expect(timeline.walkingDurationSeconds).toBe(30);
+  });
+
+  test("lands on the same state whichever rate got it there", () => {
+    // Ten seconds of simulation reached at 1x and at 10x is the same moment.
+    const slow = advancePlaybackClock(
+      { timeSeconds: 0, playbackRate: 1, isPlaying: true }, 10, timeline.totalDurationSeconds);
+    const fast = advancePlaybackClock(
+      { timeSeconds: 0, playbackRate: 10, isPlaying: true }, 1, timeline.totalDurationSeconds);
+
+    expect(fast.timeSeconds).toBeCloseTo(slow.timeSeconds, 9);
+    expect(getSimulationSnapshotAtTime(timeline, fast.timeSeconds))
+      .toEqual(getSimulationSnapshotAtTime(timeline, slow.timeSeconds));
+  });
+
+  test("changing rate mid-replay never rewrites what already happened", () => {
+    const playing = advancePlaybackClock(
+      { timeSeconds: 0, playbackRate: 1, isPlaying: true }, 4, timeline.totalDurationSeconds);
+    const sped = setPlaybackRate(playing, 10);
+
+    expect(sped.timeSeconds).toBe(playing.timeSeconds);
+    expect(getSimulationSnapshotAtTime(timeline, sped.timeSeconds).distanceTraveled)
+      .toBe(getSimulationSnapshotAtTime(timeline, playing.timeSeconds).distanceTraveled);
   });
 });

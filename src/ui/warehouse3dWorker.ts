@@ -68,7 +68,9 @@ export interface WarehouseWorkerPose {
 export const WAREHOUSE_WORKER_COLORS = {
   skin: "#c2a184",
   uniform: "#39424f",
-  workwear: "#2f3742",
+  /** Industrial charcoal: dark enough to read as workwear, light enough that the
+   * legs do not dissolve into the floor and rack shadow while walking. */
+  workwear: "#414c5c",
   hiVis: "#d8e63c",
   safety: "#c8a13a",
   equipment: "#20252c",
@@ -106,9 +108,233 @@ export function getWarehouseOperatorPartColor(partName: string, sourceColor: str
 /**
  * Where the imported operator's working hand sits, in the same figure-local
  * frame the procedural figure uses (a 1.76-unit-tall operator standing at the
- * origin). Measured once from the baked mesh; the scanner hangs here.
+ * origin). Measured from the rig's `MiddleHandR` bone in its idle pose, so the
+ * static fallback puts the scanner in the same hand the rigged operator uses.
  */
-export const WAREHOUSE_OPERATOR_HAND_ANCHOR = [0.211, 0.781, 0.039] as const;
+export const WAREHOUSE_OPERATOR_HAND_ANCHOR = [-0.227, 0.747, 0.042] as const;
+
+/** Only the authored standing clip remains in production; the rejected walk is never sampled. */
+export const WAREHOUSE_OPERATOR_CLIPS = { idle: "Man_Idle" } as const;
+
+/**
+ * Height, as a fraction of the operator's own stature, below which the model's
+ * bare legs are re-dressed as work trousers. Measured from the shipped model's
+ * shorts hem.
+ */
+export const WAREHOUSE_OPERATOR_TROUSER_LINE = 0.336;
+
+/** Bones the renderer anchors accessories to, by their name in the shipped rig. */
+export const WAREHOUSE_OPERATOR_BONES = { hand: "MiddleHandR", head: "Head" } as const;
+
+/** Sanitized glTF node names used by three.js for the reference gait deltas. */
+export const WAREHOUSE_REFERENCE_GAIT_BONES = {
+  upperLegLeft: "UpperLegL",
+  lowerLegLeft: "LowerLegL",
+  footLeft: "FootL",
+  upperLegRight: "UpperLegR",
+  lowerLegRight: "LowerLegR",
+  footRight: "FootR",
+  upperArmLeft: "UpperArmL",
+  upperArmRight: "UpperArmR",
+  pelvis: "Hips",
+  torso: "Torso",
+} as const;
+
+/**
+ * A restrained industrial hard hat, sized in figure-local units and snapped to
+ * the head bone. Deliberately small: PPE, not a costume.
+ */
+export const WAREHOUSE_OPERATOR_HAT = {
+  shellRadius: 0.125,
+  brimDepth: 0.085,
+  brimReach: 0.075,
+  /**
+   * The head bone sits at the base of the skull, a measured 0.218 below the
+   * crown, so the shell has to be lifted clear of the hair before it reads as a
+   * hat rather than a scalp.
+   */
+  lift: 0.1,
+} as const;
+
+/**
+ * Route distance covered by one full gait cycle -- a human stride at the
+ * warehouse's own walking speed of 60 m/min, which puts a cycle at about 1.15
+ * seconds of simulated time. That is what a person walking at 1 m/s looks like.
+ *
+ * This is deliberately NOT derived from the rendered figure's foot excursion.
+ * The operator is drawn several times oversized against the warehouse's
+ * horizontal scale so it stays visible, and matching its screen-space feet to
+ * the ground would stretch one cycle to roughly eleven seconds -- correct
+ * geometry, unwatchable motion. Cadence is what a viewer reads as walking, so
+ * cadence is what this constant serves; the resulting foot slip is the price,
+ * and it is paid at the scale where the figure is only a few pixels of shoe.
+ *
+ * Renderer-only. Nothing in routing, timing, or KPI reads it.
+ */
+export const WORKER_GAIT_CYCLE_METERS = 1.15;
+/** The supplied reference GIF contains 28 frames at 24 fps. */
+export const WORKER_REFERENCE_GAIT_CYCLE_SECONDS = 28 / 24;
+
+/**
+ * Distance over which the operator settles out of its walk as it turns off the
+ * aisle onto the short spur in front of a bin. Real people slow to a stop as
+ * they arrive, and starting the fade before the turn is also what keeps a
+ * swinging foot out of the racking at the moment the operator is closest to it.
+ *
+ * Sized past the spur's own length so the walk is already well damped by the
+ * time the operator faces the rack.
+ */
+export const WORKER_ARRIVAL_SETTLE_METERS = 1.6;
+
+export interface WarehouseOperatorGait {
+  /** 0 = standing, 1 = full reference gait. */
+  readonly walkWeight: number;
+  readonly walkTimeSeconds: number;
+  readonly idleTimeSeconds: number;
+  /** Cycles completed since the route began; useful for assertions. */
+  readonly gaitCycles: number;
+}
+
+export interface WarehouseReferenceGaitPose {
+  readonly phase: number;
+  readonly upperLegLeft: number;
+  readonly lowerLegLeft: number;
+  readonly footLeft: number;
+  readonly upperLegRight: number;
+  readonly lowerLegRight: number;
+  readonly footRight: number;
+  readonly upperArmLeft: number;
+  readonly upperArmRight: number;
+  readonly pelvisYaw: number;
+  readonly torsoYaw: number;
+}
+
+const degrees = (value: number) => value * Math.PI / 180;
+
+/**
+ * Four coherent silhouettes copied from the supplied 1.17 s walking reference:
+ * contact, passing, opposite contact, opposite passing. These are deliberately
+ * conservative local deltas from the rig's authored idle pose, not corrections
+ * to the rejected walk clip. The root, head and vertical position are absent by
+ * design, so animation can never compete with SimulationSnapshot translation.
+ */
+export const WAREHOUSE_REFERENCE_GAIT_KEY_POSES: readonly WarehouseReferenceGaitPose[] = [
+  { phase: 0, upperLegLeft: degrees(20), lowerLegLeft: degrees(3), footLeft: degrees(-3),
+    upperLegRight: degrees(-18), lowerLegRight: degrees(6), footRight: degrees(4),
+    upperArmLeft: degrees(-12), upperArmRight: degrees(9), pelvisYaw: degrees(-2), torsoYaw: degrees(2) },
+  { phase: 0.25, upperLegLeft: degrees(-4), lowerLegLeft: degrees(5), footLeft: degrees(1),
+    upperLegRight: degrees(6), lowerLegRight: degrees(28), footRight: degrees(-7),
+    upperArmLeft: 0, upperArmRight: 0, pelvisYaw: 0, torsoYaw: 0 },
+  { phase: 0.5, upperLegLeft: degrees(-18), lowerLegLeft: degrees(6), footLeft: degrees(4),
+    upperLegRight: degrees(20), lowerLegRight: degrees(3), footRight: degrees(-3),
+    upperArmLeft: degrees(12), upperArmRight: degrees(-9), pelvisYaw: degrees(2), torsoYaw: degrees(-2) },
+  { phase: 0.75, upperLegLeft: degrees(6), lowerLegLeft: degrees(28), footLeft: degrees(-7),
+    upperLegRight: degrees(-4), lowerLegRight: degrees(5), footRight: degrees(1),
+    upperArmLeft: 0, upperArmRight: 0, pelvisYaw: 0, torsoYaw: 0 },
+] as const;
+
+const REFERENCE_GAIT_FIELDS = [
+  "upperLegLeft", "lowerLegLeft", "footLeft", "upperLegRight", "lowerLegRight", "footRight",
+  "upperArmLeft", "upperArmRight", "pelvisYaw", "torsoYaw",
+] as const;
+
+/** Deterministic smooth interpolation around the four-pose closed cycle. */
+export function createWarehouseReferenceGaitPose(gaitCycles: number): WarehouseReferenceGaitPose {
+  const phase = fract(Math.max(0, Number.isFinite(gaitCycles) ? gaitCycles : 0));
+  const scaled = phase * WAREHOUSE_REFERENCE_GAIT_KEY_POSES.length;
+  const from = Math.floor(scaled) % WAREHOUSE_REFERENCE_GAIT_KEY_POSES.length;
+  const to = (from + 1) % WAREHOUSE_REFERENCE_GAIT_KEY_POSES.length;
+  const linear = scaled - Math.floor(scaled);
+  const amount = linear * linear * (3 - 2 * linear);
+  const result: Record<string, number> = { phase };
+  for (const field of REFERENCE_GAIT_FIELDS) {
+    result[field] = WAREHOUSE_REFERENCE_GAIT_KEY_POSES[from][field]
+      + (WAREHOUSE_REFERENCE_GAIT_KEY_POSES[to][field]
+        - WAREHOUSE_REFERENCE_GAIT_KEY_POSES[from][field]) * amount;
+  }
+  return result as unknown as WarehouseReferenceGaitPose;
+}
+
+export interface WarehouseOperatorClipTiming {
+  readonly walkDurationSeconds: number;
+  readonly idleDurationSeconds: number;
+}
+
+function fract(value: number): number {
+  return value - Math.floor(value);
+}
+
+/**
+ * Derives the operator's locomotion pose from simulation truth alone.
+ *
+ * Gait phase comes from `distanceTraveled`, not from a clock, which is what
+ * makes pause freeze the legs mid-stride, seeking land on the pose that belongs
+ * to that point of the route, and 10x playback cycle the legs ten times faster
+ * without the animation ever drifting out of step with the position.
+ *
+ * Playback rate never appears here. It changes how fast distance accumulates,
+ * and the gait follows the distance.
+ */
+export function createWarehouseOperatorGait(
+  snapshot: SimulationSnapshot,
+  clips: WarehouseOperatorClipTiming,
+  /** Ids that are routing destinations rather than pass-through aisle nodes. */
+  attachmentIds?: ReadonlySet<NodeId>,
+): WarehouseOperatorGait {
+  const { walkDurationSeconds, idleDurationSeconds } = clips;
+  const idleTimeSeconds = idleDurationSeconds > 0
+    ? fract(Math.max(0, snapshot.timeSeconds) / idleDurationSeconds) * idleDurationSeconds
+    : 0;
+  const standing: WarehouseOperatorGait = {
+    walkWeight: 0,
+    walkTimeSeconds: 0,
+    idleTimeSeconds,
+    gaitCycles: 0,
+  };
+
+  if (!walkDurationSeconds || walkDurationSeconds <= 0) return standing;
+
+  const cursor = snapshot.current;
+  if (!cursor || cursor.kind !== "travel") return standing;
+
+  const gaitCycles = Math.max(0, snapshot.distanceTraveled) / WORKER_GAIT_CYCLE_METERS;
+  // Arriving at a bin means the next thing that happens is standing still, so
+  // the walk fades out instead of being cut off mid-stride.
+  const arriving = attachmentIds?.has(cursor.to) ?? false;
+  const settle = arriving
+    ? Math.min(1, Math.max(0, cursor.distanceRemainingOnSegment / WORKER_ARRIVAL_SETTLE_METERS))
+    : 1;
+
+  return {
+    walkWeight: settle * settle,
+    walkTimeSeconds: fract(gaitCycles) * walkDurationSeconds,
+    idleTimeSeconds,
+    gaitCycles,
+  };
+}
+
+/**
+ * Model units to world units for the operator's body.
+ *
+ * Two things this deliberately does NOT do, both of which were real bugs:
+ *
+ * - It takes the model's **measured skinned stature**, not a bounding box of
+ *   the bind pose. A rigged human rests in a T-pose whose box says nothing
+ *   useful about how tall the posed figure draws.
+ * - It does not apply the zoom LOD. The group the figure hangs in already
+ *   scales by it; folding it in here squared the LOD and rendered an operator
+ *   at a third of its intended height at ordinary zoom levels, which made a
+ *   correctly animated walk cycle far too small to read.
+ */
+export function getWarehouseOperatorBodyScale(
+  measuredStature: number,
+  targetHeight: number,
+): number {
+  if (![measuredStature, targetHeight].every((value) => Number.isFinite(value) && value > 0)) {
+    return 1;
+  }
+  return targetHeight / measuredStature;
+}
 
 export interface WarehouseOperatorScanner {
   /** Figure-local position of the scanner body. */

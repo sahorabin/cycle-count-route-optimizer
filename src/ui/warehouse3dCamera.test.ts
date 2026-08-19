@@ -42,8 +42,28 @@ describe("warehouse 3D camera model", () => {
     const worker = { x: 4, y: 0, z: -6 };
     const view = createWarehouseCameraPresetView("worker", 10, worker);
     expect(view.target).toEqual([4, 0, -6]);
-    expect(view.position).toEqual([13, 9, 3]);
-    expect(view.zoom).toBe(16.5);
+    expect(view.position).toEqual([7, 5.5, 4]);
+    expect(view.zoom).toBe(24);
+  });
+
+  test("keeps worker focus low enough to read a walking stride", () => {
+    const worker = { x: 0, y: 0, z: 0 };
+    const view = createWarehouseCameraPresetView("worker", 10, worker);
+    const [x, y, z] = view.position;
+    const elevation = Math.atan2(y, Math.hypot(x, z)) * (180 / Math.PI);
+
+    // Looking down from steeply above foreshortens a stride into nothing, which
+    // is what made the operator read as sliding; straight-on hides the aisle.
+    expect(elevation).toBeGreaterThan(15);
+    expect(elevation).toBeLessThan(32);
+    // Three-quarter, not a straight rear or side shot: both legs stay readable.
+    expect(Math.abs(x)).toBeGreaterThan(1);
+    expect(Math.abs(z)).toBeGreaterThan(1);
+    // Aisles run along Z, so the shot looks down the corridor rather than
+    // across the rows, where racking would stand in front of the operator.
+    expect(Math.abs(z)).toBeGreaterThan(Math.abs(x) * 2);
+    // Still a context shot, not a portrait: the warehouse stays in frame.
+    expect(view.zoom).toBeLessThan(10 * 2.5);
   });
 
   test("synchronizes either comparison camera through one renderer channel", () => {

@@ -6,7 +6,10 @@ import { createWarehouse3DTransform, type WorldPoint } from "./warehouse3dProjec
 import { createWarehouseCountingGesture } from "./warehouse3dServiceVisual";
 import { WAREHOUSE_3D_VISUALS } from "./warehouse3dVisuals";
 import { WAREHOUSE_WORKER_COLORS } from "./warehouse3dWorker";
+import type { SimulationSnapshot } from "../simulation/types";
 import {
+  createWarehouseOperatorGait,
+  createWarehouseReferenceGaitPose,
   createWarehouseOperatorScanner,
   createWarehouseWorkerPose,
   createWarehouseWorkerScanCue,
@@ -18,7 +21,14 @@ import {
   getWarehouseWorkerFacingYaw,
   getWarehouseWorkerFigureScale,
   getWarehouseOperatorPartColor,
+  getWarehouseOperatorBodyScale,
+  WAREHOUSE_OPERATOR_BONES,
+  WAREHOUSE_OPERATOR_CLIPS,
   WAREHOUSE_OPERATOR_HAND_ANCHOR,
+  WAREHOUSE_REFERENCE_GAIT_KEY_POSES,
+  WAREHOUSE_REFERENCE_GAIT_BONES,
+  WORKER_ARRIVAL_SETTLE_METERS,
+  WORKER_GAIT_CYCLE_METERS,
   WAREHOUSE_OPERATOR_PPE,
   WAREHOUSE_WORKER_DEPTH_POLICY,
   WAREHOUSE_WORKER_SCALE,
@@ -136,6 +146,77 @@ describe("warehouse3dWorker", () => {
     expect(visual.parts).toHaveLength(17);
     expect(numbers.length).toBeGreaterThan(0);
     expect(numbers.every(Number.isFinite)).toBe(true);
+  });
+});
+
+describe("reference-driven four-pose gait", () => {
+  const at = (phase: number) => createWarehouseReferenceGaitPose(phase);
+
+  test("lands exactly on contact and passing key poses", () => {
+    for (const phase of [0, 0.25, 0.5, 0.75]) {
+      expect(at(phase)).toEqual(WAREHOUSE_REFERENCE_GAIT_KEY_POSES[phase * 4]);
+    }
+  });
+
+  test("alternates left and right contact symmetrically", () => {
+    const left = at(0);
+    const right = at(0.5);
+    expect(left.upperLegLeft).toBeCloseTo(right.upperLegRight, 10);
+    expect(left.upperLegRight).toBeCloseTo(right.upperLegLeft, 10);
+    expect(left.lowerLegLeft).toBeCloseTo(right.lowerLegRight, 10);
+    expect(left.lowerLegRight).toBeCloseTo(right.lowerLegLeft, 10);
+    expect(left.upperArmLeft).toBeCloseTo(-right.upperArmLeft, 10);
+    expect(left.upperArmRight).toBeCloseTo(-right.upperArmRight, 10);
+  });
+
+  test("keeps every joint within the restrained reference ranges", () => {
+    const radians = (degrees: number) => degrees * Math.PI / 180;
+    for (const pose of WAREHOUSE_REFERENCE_GAIT_KEY_POSES) {
+      expect(Math.abs(pose.upperLegLeft)).toBeLessThanOrEqual(radians(20));
+      expect(Math.abs(pose.upperLegRight)).toBeLessThanOrEqual(radians(20));
+      expect(pose.lowerLegLeft).toBeGreaterThanOrEqual(0);
+      expect(pose.lowerLegRight).toBeGreaterThanOrEqual(0);
+      expect(pose.lowerLegLeft).toBeLessThanOrEqual(radians(28));
+      expect(pose.lowerLegRight).toBeLessThanOrEqual(radians(28));
+      expect(Math.abs(pose.upperArmLeft)).toBeLessThanOrEqual(radians(12));
+      expect(Math.abs(pose.upperArmRight)).toBeLessThanOrEqual(radians(9));
+      expect(Math.abs(pose.pelvisYaw)).toBeLessThanOrEqual(radians(2));
+      expect(Math.abs(pose.torsoYaw)).toBeLessThanOrEqual(radians(2));
+    }
+  });
+
+  test("names every required arm, leg, foot, pelvis and torso bone", () => {
+    expect(WAREHOUSE_REFERENCE_GAIT_BONES).toEqual({
+      upperLegLeft: "UpperLegL", lowerLegLeft: "LowerLegL", footLeft: "FootL",
+      upperLegRight: "UpperLegR", lowerLegRight: "LowerLegR", footRight: "FootR",
+      upperArmLeft: "UpperArmL", upperArmRight: "UpperArmR", pelvis: "Hips", torso: "Torso",
+    });
+  });
+
+  test("has no root or vertical channel and repeats deterministically", () => {
+    for (const pose of WAREHOUSE_REFERENCE_GAIT_KEY_POSES) {
+      expect(pose).not.toHaveProperty("root");
+      expect(pose).not.toHaveProperty("position");
+      expect(pose).not.toHaveProperty("verticalBob");
+    }
+    for (const phase of [0, 0.13, 0.37, 0.61, 0.99, 4.37]) {
+      expect(at(phase)).toEqual(at(phase));
+      const repeated = at(phase + 1);
+      const original = at(phase);
+      for (const field of Object.keys(original) as (keyof typeof original)[]) {
+        expect(repeated[field]).toBeCloseTo(original[field], 12);
+      }
+    }
+  });
+
+  test("smooth interpolation never overshoots the key-pose bounds", () => {
+    for (let i = 0; i < 100; i += 1) {
+      const pose = at(i / 100);
+      expect(Math.abs(pose.upperLegLeft)).toBeLessThanOrEqual(20 * Math.PI / 180);
+      expect(Math.abs(pose.upperLegRight)).toBeLessThanOrEqual(20 * Math.PI / 180);
+      expect(pose.lowerLegLeft).toBeLessThanOrEqual(28 * Math.PI / 180);
+      expect(pose.lowerLegRight).toBeLessThanOrEqual(28 * Math.PI / 180);
+    }
   });
 });
 
@@ -521,5 +602,198 @@ describe("imported operator scanner", () => {
 
   test("emits no scan cue at all outside service", () => {
     expect(createWarehouseWorkerScanCue(null, [0, 1, 0])).toBeNull();
+  });
+});
+
+describe("operator locomotion", () => {
+  const CLIPS = { walkDurationSeconds: 1.0416666, idleDurationSeconds: 4.1666666 };
+  /** The warehouse's physical walking speed, which S7K.1 does not touch. */
+  const WALKING_SPEED_METERS_PER_SECOND = 1;
+  const STRIDE_METERS = WORKER_GAIT_CYCLE_METERS;
+
+  const travelling = (distanceTraveled: number, overrides = {}): SimulationSnapshot => ({
+    timeSeconds: distanceTraveled,
+    isComplete: false,
+    totalDurationSeconds: 500,
+    totalDistance: 240,
+    distanceTraveled,
+    distanceRemaining: 240 - distanceTraveled,
+    completedLegCount: 0,
+    completedDestinationIds: [],
+    current: {
+      kind: "travel",
+      legIndex: 0,
+      segmentIndex: 2,
+      from: "A1",
+      to: "A2",
+      progress: 0.5,
+      distanceTraveledOnSegment: 5,
+      distanceRemainingOnSegment: 5,
+      ...overrides,
+    },
+  });
+
+  const servicing = (distanceTraveled: number): SimulationSnapshot => ({
+    ...travelling(distanceTraveled),
+    current: {
+      kind: "service",
+      legIndex: 0,
+      locationId: "loc-A01",
+      serviceClass: "simple",
+      progress: 0.3,
+      elapsedSeconds: 6,
+      durationSeconds: 20,
+      remainingSeconds: 14,
+    },
+  });
+
+  const gait = (snapshot: SimulationSnapshot, ids?: ReadonlySet<string>) =>
+    createWarehouseOperatorGait(snapshot, CLIPS, ids);
+
+  test("derives the gait from distance travelled, never from a clock", () => {
+    const first = gait(travelling(37.5));
+
+    expect(gait(travelling(37.5))).toEqual(first);
+    // One whole stride later the legs are back where they started.
+    expect(gait(travelling(37.5 + STRIDE_METERS)).walkTimeSeconds)
+      .toBeCloseTo(first.walkTimeSeconds, 6);
+    expect(gait(travelling(37.5 + STRIDE_METERS * 3)).walkTimeSeconds)
+      .toBeCloseTo(first.walkTimeSeconds, 6);
+    // Half a stride later it is demonstrably a different pose.
+    expect(gait(travelling(37.5 + STRIDE_METERS / 2)).walkTimeSeconds)
+      .not.toBeCloseTo(first.walkTimeSeconds, 3);
+  });
+
+  test("reproduces the same pose on seek, forward or backward", () => {
+    const path = [0, 4.5, 19, 61.25, 120, 61.25, 19, 4.5, 0];
+    const poses = path.map((distance) => gait(travelling(distance)).walkTimeSeconds);
+
+    // The walk back down the list matches the walk up it, exactly.
+    expect(poses.slice(5)).toEqual(poses.slice(0, 4).reverse());
+    // Reset lands on the start of the cycle.
+    expect(gait(travelling(0)).walkTimeSeconds).toBe(0);
+    expect(gait(travelling(0)).gaitCycles).toBe(0);
+  });
+
+  test("keeps the pose frozen while paused, because nothing but state moves it", () => {
+    const paused = travelling(88.125);
+    const samples = Array.from({ length: 5 }, () => gait(paused));
+
+    for (const sample of samples) expect(sample).toEqual(samples[0]);
+  });
+
+  test("walks only while travelling", () => {
+    expect(gait(travelling(50)).walkWeight).toBe(1);
+    expect(gait(servicing(50)).walkWeight).toBe(0);
+
+    const complete: SimulationSnapshot = {
+      ...travelling(240), isComplete: true, current: null, distanceRemaining: 0,
+    };
+    expect(gait(complete).walkWeight).toBe(0);
+    // A stationary operator still holds a real standing pose, not frame zero of
+    // a stride it happened to stop on.
+    expect(gait(complete).walkTimeSeconds).toBe(0);
+    expect(gait(complete).idleTimeSeconds).toBeGreaterThanOrEqual(0);
+  });
+
+  test("settles out of the walk on the short spur in front of a bin", () => {
+    const bins = new Set(["loc-A01"]);
+    const arriving = (remaining: number) =>
+      gait(travelling(50, { to: "loc-A01", distanceRemainingOnSegment: remaining }), bins);
+
+    expect(arriving(WORKER_ARRIVAL_SETTLE_METERS * 2).walkWeight).toBe(1);
+    // Well damped before the operator ever turns to face the rack: the spur is
+    // about 1.08 m long, and the fade has to be under way by then.
+    expect(arriving(1.08).walkWeight).toBeLessThan(0.5);
+    expect(arriving(WORKER_ARRIVAL_SETTLE_METERS / 2).walkWeight).toBeLessThan(0.3);
+    expect(arriving(0).walkWeight).toBe(0);
+    // Monotonic: the operator only ever slows on the way in.
+    const weights = [1.6, 1.2, 0.8, 0.4, 0].map((d) => arriving(d).walkWeight);
+    expect(weights).toEqual([...weights].sort((a, b) => b - a));
+    // Walking down an aisle towards another aisle node is never damped.
+    expect(gait(travelling(50, { to: "A9", distanceRemainingOnSegment: 0 }), bins).walkWeight)
+      .toBe(1);
+  });
+
+  test("walks at a human cadence at the warehouse's own walking speed", () => {
+    const cycles = gait(travelling(STRIDE_METERS * 4)).gaitCycles;
+    expect(cycles).toBeCloseTo(4, 6);
+
+    // The gate this phase exists for: one cycle per second-ish at 1x, which is
+    // what a person walking 1 m/s looks like. Anything near ten seconds reads
+    // as slow motion however correct its geometry is.
+    const secondsPerCycle = WORKER_GAIT_CYCLE_METERS / WALKING_SPEED_METERS_PER_SECOND;
+    expect(secondsPerCycle).toBeGreaterThan(0.8);
+    expect(secondsPerCycle).toBeLessThan(1.6);
+    // A human stride, not an avatar-sized one.
+    expect(WORKER_GAIT_CYCLE_METERS).toBeGreaterThan(0.9);
+    expect(WORKER_GAIT_CYCLE_METERS).toBeLessThan(1.5);
+  });
+
+  test("takes its cadence from human locomotion, not from the avatar's scale", () => {
+    // The operator is drawn several times oversized for readability. If that
+    // scale ever leaks back into the gait, cadence collapses into slow motion,
+    // so the calibration deliberately has no renderer-scale input at all.
+    expect(createWarehouseOperatorGait.length).toBeLessThanOrEqual(3);
+    const sample = gait(travelling(12.5));
+    expect(gait(travelling(12.5))).toEqual(sample);
+    // Ten strides of route distance is ten cycles, whatever the figure's size.
+    expect(gait(travelling(WORKER_GAIT_CYCLE_METERS * 10)).gaitCycles).toBeCloseTo(10, 6);
+  });
+
+  test("leaves playback rate out of the gait formula entirely", () => {
+    // Rate changes how fast distance accumulates; the pose follows distance.
+    // Two runs at different rates that reached the same distance must match.
+    const slow = gait(travelling(9.2));
+    const fast = gait({ ...travelling(9.2), timeSeconds: 9.2 / 10 });
+
+    expect(fast.walkTimeSeconds).toBe(slow.walkTimeSeconds);
+    expect(fast.gaitCycles).toBe(slow.gaitCycles);
+  });
+
+  test("degrades to standing rather than animating nonsense", () => {
+    // A file with no walk clip still produces a usable standing operator.
+    for (const walkDurationSeconds of [0, -1, Number.NaN]) {
+      const result = createWarehouseOperatorGait(
+        travelling(50), { walkDurationSeconds, idleDurationSeconds: 4 },
+      );
+      expect({ walkDurationSeconds, weight: result.walkWeight })
+        .toEqual({ walkDurationSeconds, weight: 0 });
+      expect(Number.isFinite(result.idleTimeSeconds)).toBe(true);
+    }
+  });
+
+  test("emits only finite, in-range animation times", () => {
+    for (const distance of [0, 0.001, 7, 113.7, 12345]) {
+      const result = gait(travelling(distance));
+      expect(result.walkTimeSeconds).toBeGreaterThanOrEqual(0);
+      expect(result.walkTimeSeconds).toBeLessThan(CLIPS.walkDurationSeconds);
+      expect(result.idleTimeSeconds).toBeLessThan(CLIPS.idleDurationSeconds);
+      expect([result.walkWeight, result.gaitCycles].every(Number.isFinite)).toBe(true);
+    }
+  });
+
+  test("names only the standing clip and bones it needs from the shipped rig", () => {
+    expect(WAREHOUSE_OPERATOR_CLIPS).not.toHaveProperty("walk");
+    expect(WAREHOUSE_OPERATOR_CLIPS.idle).toBe("Man_Idle");
+    expect(WAREHOUSE_OPERATOR_BONES.hand).toBe("MiddleHandR");
+    expect(WAREHOUSE_OPERATOR_BONES.head).toBe("Head");
+  });
+
+  test("scales the body to its target stature and nothing else", () => {
+    // Measured skinned stature of the shipped rig, in model units.
+    const stature = 4.812;
+
+    expect(getWarehouseOperatorBodyScale(stature, 1.76) * stature).toBeCloseTo(1.76, 9);
+    // The regression this replaced: the enclosing group already applies the
+    // zoom LOD, so folding it in here squared it and shrank the operator to a
+    // third of its height at ordinary zoom, hiding the walk cycle.
+    expect(getWarehouseOperatorBodyScale.length).toBe(2);
+    for (const lod of [0.55, 0.7]) {
+      expect(getWarehouseOperatorBodyScale(stature, 1.76) * lod * stature)
+        .toBeLessThan(1.76);
+    }
+    expect(getWarehouseOperatorBodyScale(0, 1.76)).toBe(1);
+    expect(getWarehouseOperatorBodyScale(Number.NaN, 1.76)).toBe(1);
   });
 });

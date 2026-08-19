@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { Box3, Vector3 } from "three";
-import type { BufferGeometry, Group, Material, Mesh, MeshStandardMaterial } from "three";
+import { Box3, Matrix4, Vector3 } from "three";
+import type {
+  AnimationClip, BufferGeometry, Group, Material, Mesh, MeshStandardMaterial,
+} from "three";
 import { WAREHOUSE_3D_MATERIALS } from "./warehouse3dVisuals";
 import {
   getWarehouseAssetEntry,
@@ -33,6 +35,11 @@ export interface WarehouseAssetHandle {
    * with one uniform group scale and dresses each piece by material name.
    */
   readonly parts: readonly WarehouseAssetPart[] | null;
+  /**
+   * Animation clips the file shipped with. Renderers sample these; nothing here
+   * ever advances on its own, and no clip may move the figure through the scene.
+   */
+  readonly animations: readonly AnimationClip[];
 }
 
 export interface WarehouseAssetPart {
@@ -51,6 +58,7 @@ const FALLBACK: WarehouseAssetHandle = {
   material: null,
   naturalSize: null,
   parts: null,
+  animations: [],
 };
 
 const FAILED: WarehouseAssetHandle = { ...FALLBACK, status: "error" };
@@ -82,6 +90,55 @@ export function normalizeAssetGeometryToUnitBox(
   geometry.translate(-center.x, -center.y, -center.z);
   geometry.scale(1 / size.x, 1 / size.y, 1 / size.z);
   return { geometry, size };
+}
+
+/**
+ * Splits a mesh's triangles into two material groups at a height, given as a
+ * fraction of the mesh's own vertical extent. Nothing is deformed and no vertex
+ * moves: only the index order and the group table change, so skinning, joints,
+ * and weights all survive untouched.
+ *
+ * This is how a model that ships in street clothes gets work trousers without
+ * editing the file that shipped.
+ */
+export function splitGeometryGroupsByHeight(
+  geometry: BufferGeometry,
+  matrixWorld: Matrix4,
+  fractionOfHeight: number,
+): boolean {
+  const position = geometry.getAttribute("position");
+  const index = geometry.getIndex();
+  if (!position || !index || !Number.isFinite(fractionOfHeight)) return false;
+
+  const point = new Vector3();
+  const heights = new Float32Array(position.count);
+  let min = Infinity;
+  let max = -Infinity;
+  for (let i = 0; i < position.count; i += 1) {
+    point.fromBufferAttribute(position, i).applyMatrix4(matrixWorld);
+    heights[i] = point.y;
+    if (point.y < min) min = point.y;
+    if (point.y > max) max = point.y;
+  }
+  if (!(max > min)) return false;
+
+  const threshold = min + (max - min) * fractionOfHeight;
+  const keep: number[] = [];
+  const move: number[] = [];
+  for (let i = 0; i < index.count; i += 3) {
+    const [a, b, c] = [index.getX(i), index.getX(i + 1), index.getX(i + 2)];
+    const centroid = (heights[a] + heights[b] + heights[c]) / 3;
+    (centroid < threshold ? move : keep).push(a, b, c);
+  }
+  if (!move.length || !keep.length) return false;
+
+  const ordered = [...keep, ...move];
+  for (let i = 0; i < ordered.length; i += 1) index.setX(i, ordered[i]);
+  index.needsUpdate = true;
+  geometry.clearGroups();
+  geometry.addGroup(0, keep.length, 0);
+  geometry.addGroup(keep.length, move.length, 1);
+  return true;
 }
 
 /**
@@ -194,6 +251,7 @@ export function loadWarehouseAsset(id: string): Promise<WarehouseAssetHandle> {
         geometry: normalized.geometry,
         material: clampAssetMaterial(source.material),
         parts: grounded.parts,
+        animations: gltf.animations ?? [],
         naturalSize: [size.x, size.y, size.z],
         normalization: normalizeAssetToEnvelope(
           { width: size.x, height: size.y, depth: size.z },

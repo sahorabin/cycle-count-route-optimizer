@@ -10,7 +10,14 @@ Redistribution: Permitted. CC0 places the work in the public domain; no
                 here as a courtesy to the author.
 Commercial use: Permitted.
 
-Modifications made for this project (permitted under CC0, listed for honesty):
+Two derivatives of this one CC0 source ship here:
+
+  quaternius_man_01_rigged.glb   the original file, byte-for-byte as downloaded
+  quaternius_man_01.gltf/.bin    a static posed bake of it (see below)
+
+The rigged GLB is the primary operator; the static bake is its fallback.
+
+Modifications made for the static bake (permitted under CC0, listed for honesty):
   - The source is a rigged GLB with 11 animation clips. One frame of its "Idle"
     clip (t = 0.4s) was baked into a static mesh: skinning was applied per
     vertex, normals were recomputed for the posed geometry, and the skeleton,
@@ -25,13 +32,20 @@ Modifications made for this project (permitted under CC0, listed for honesty):
     material name and is not baked into this file.
 
 Files in this directory:
-  quaternius_man_01.gltf                  8,173 bytes
-  quaternius_man_01.bin                 150,960 bytes
-  Total                                   ~156 KB
+  quaternius_man_01_rigged.glb          493,196 bytes   (unmodified original)
+  quaternius_man_01.gltf                  8,173 bytes   (static bake)
+  quaternius_man_01.bin                 150,960 bytes   (static bake)
+  Total                                   ~650 KB
 
-Geometry: 1 mesh, 7 primitives, 7 materials, 1,852 triangles, no textures,
+Original rigged GLB: 1 skin, 31 bones, 11 animation clips, 6 materials,
+1,852 triangles, no textures. sha256
+dad8fa3ca2bc7760892f9ff47f544941179e50acb2aa772cf9f035154a37fc58
+
+Static bake: 1 mesh, 7 primitives, 7 materials, 1,852 triangles, no textures,
 no skin, no animations.
-Retrieved: 2026-08-19 from poly.pizza.
+
+Retrieved: 2026-08-19 from poly.pizza; licence re-verified 2026-08-19
+("Public Domain (CC0)").
 
 Used in this project as the warehouse operator. It is presentation only:
 warehouse layout, routing, timing, simulation state, and KPI truth never read

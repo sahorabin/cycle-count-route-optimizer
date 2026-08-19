@@ -101,6 +101,22 @@ export const WAREHOUSE_ASSET_REGISTRY: readonly WarehouseAssetEntry[] = [
       + "pallet below it; the procedural block remains the fallback.",
   },
   {
+    id: "operator-rigged",
+    category: "worker",
+    file: "/assets/worker/quaternius_man_01/quaternius_man_01_rigged.glb",
+    provenance: {
+      source: "https://poly.pizza/m/HMnuH5geEG",
+      license: "CC0",
+      redistributable: true,
+      attribution: "Man by Quaternius (poly.pizza), CC0",
+      commercialUse: true,
+    },
+    envelopeSpan: 1.76,
+    note: "The same CC0 human, unmodified, with its skeleton intact. This is the "
+      + "primary operator mannequin; its rejected authored walk is not sampled. "
+      + "The static bake below and procedural figure remain the fallback ladder.",
+  },
+  {
     id: "operator",
     category: "worker",
     file: "/assets/worker/quaternius_man_01/quaternius_man_01.gltf",

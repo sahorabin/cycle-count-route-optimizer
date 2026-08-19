@@ -135,9 +135,24 @@ const PRESET_CONFIG = {
     offset: [22, 7.5, 2] as const,
     zoomRatio: 1.2,
   },
+  /**
+   * A locomotion-reading shot, not a map view.
+   *
+   * Two things decide this framing. Rack runs are long in Z and thin in X, so
+   * the aisles run along Z: a camera offset mainly in Z looks *down* the
+   * corridor and has clear sight of the operator, while the old 45-degree
+   * diagonal looked across the rows and put 2.3-unit racking in front of the
+   * body. And elevation has to stay near 28 degrees -- steeper foreshortens a
+   * stride into nothing, shallower buries the legs behind the nearest run.
+   *
+   * The small X offset keeps it a three-quarter view rather than a flat rear
+   * shot, so both legs and both arms stay readable and the direction of travel
+   * is obvious. The zoom still shows the aisle and neighbouring racks; this is
+   * a context shot, not a portrait.
+   */
   worker: {
-    offset: [9, 9, 9] as const,
-    zoomRatio: 1.65,
+    offset: [3, 5.5, 10] as const,
+    zoomRatio: 2.4,
   },
 } satisfies Record<WarehouseCameraPreset, {
   readonly offset: readonly [number, number, number];
@@ -163,6 +178,13 @@ export function createWarehouseCameraPresetView(
   preset: WarehouseCameraPreset,
   baseZoom: number,
   workerPoint?: WorldPoint,
+  /**
+   * Which way the operator is walking. Worker focus swings its offset behind
+   * that heading so it always looks along the aisle the operator is actually
+   * in, instead of across the rows where 2.3-unit racking stands in front of
+   * the body. Renderer-only: it reads the same yaw the figure is drawn with.
+   */
+  facingYaw?: number,
 ): WarehouseCameraView {
   requirePositiveBaseZoom(baseZoom);
   const config = PRESET_CONFIG[preset];
@@ -170,13 +192,23 @@ export function createWarehouseCameraPresetView(
     ? [workerPoint.x, 0, workerPoint.z] as const
     : [0, 0, 0] as const;
 
+  const [offsetX, offsetY, offsetZ] = config.offset;
+  const yaw = preset === "worker" && Number.isFinite(facingYaw) ? facingYaw as number : 0;
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  const offset = [
+    offsetX * cos + offsetZ * sin,
+    offsetY,
+    offsetZ * cos - offsetX * sin,
+  ] as const;
+
   return {
     preset,
     target,
     position: [
-      target[0] + config.offset[0],
-      target[1] + config.offset[1],
-      target[2] + config.offset[2],
+      target[0] + offset[0],
+      target[1] + offset[1],
+      target[2] + offset[2],
     ],
     zoom: clampWarehouseCameraZoom(baseZoom * config.zoomRatio, baseZoom),
   };

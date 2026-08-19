@@ -1,12 +1,22 @@
 import { Canvas, useThree } from "@react-three/fiber";
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { InstancedMesh, Object3D, OrthographicCamera, Quaternion, Vector3 } from "three";
-import type { BufferGeometry, Material } from "three";
+import {
+  AnimationMixer, Box3, InstancedMesh, Object3D, OrthographicCamera, Quaternion, Vector3,
+} from "three";
+import type {
+  AnimationClip, BufferGeometry, Group, Material, Mesh, MeshStandardMaterial, SkinnedMesh,
+} from "three";
+import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { NodeId, RouteTimeline, WarehouseGraph } from "../domain/types";
 import type { SimulationSnapshot } from "../simulation/types";
 import { buildCoordinateLookup, type Point } from "../ui/svgPoints";
-import { useWarehouseAsset, type WarehouseAssetPart } from "../ui/warehouse3dAssetLoader";
+import {
+  splitGeometryGroupsByHeight,
+  useWarehouseAsset,
+  type WarehouseAssetPart,
+} from "../ui/warehouse3dAssetLoader";
+import { getWarehouseAssetEntry } from "../ui/warehouse3dAssetRegistry";
 import { buildWarehouseStorageRenderSet } from "../ui/warehouse3dStorage";
 import {
   createWarehouseActiveServiceVisual,
@@ -36,6 +46,10 @@ import {
 } from "../ui/warehouse3dCamera";
 import { createWarehouseOrbitControlsOwner } from "../ui/warehouse3dControls";
 import {
+  applyWarehouseAnatomicalGaitPose,
+  createWarehouseAnatomicalCalibration,
+} from "../ui/warehouse3dAnatomicalGait";
+import {
   buildWarehouse3DEnvironment,
   getWarehouseEnvironmentDetailLevel,
   getWarehouseEnvironmentRenderSet,
@@ -57,14 +71,23 @@ import {
   type Warehouse3DRouteVisualSegment,
 } from "../ui/warehouse3dVisuals";
 import {
+  createWarehouseOperatorGait,
+  createWarehouseReferenceGaitPose,
   createWarehouseOperatorScanner,
   createWarehouseWorkerPose,
   createWarehouseWorkerScanCue,
   createWarehouseWorkerVisual,
+  getWarehouseOperatorBodyScale,
   getWarehouseOperatorPartColor,
   getWarehouseWorkerFigureScale,
+  WAREHOUSE_OPERATOR_BONES,
+  WAREHOUSE_OPERATOR_CLIPS,
+  WAREHOUSE_OPERATOR_HAT,
+  WAREHOUSE_OPERATOR_TROUSER_LINE,
+  WORKER_REFERENCE_GAIT_CYCLE_SECONDS,
   WAREHOUSE_WORKER_DEPTH_POLICY,
   WAREHOUSE_WORKER_COLORS,
+  type WarehouseOperatorGait,
   type WarehouseOperatorScanner,
   type WarehouseWorkerScanCue,
   type WarehouseWorkerVisualPart,
@@ -99,6 +122,7 @@ interface InteractiveWarehouseCameraProps {
   authority: boolean;
   instanceId: string;
   workerPoint: { readonly x: number; readonly y: number; readonly z: number };
+  workerFacingYaw: number;
   onDetailLevelChange?: (level: WarehouseLocationDetailLevel) => void;
   onZoomBucketChange?: (bucket: number) => void;
   storyFocus?: WarehouseStoryCameraFocus | null;
@@ -112,6 +136,7 @@ export function InteractiveWarehouseCamera({
   authority,
   instanceId,
   workerPoint,
+  workerFacingYaw,
   onDetailLevelChange,
   onZoomBucketChange,
   storyFocus = null,
@@ -123,8 +148,10 @@ export function InteractiveWarehouseCamera({
   const applyViewRef = useRef<((view: WarehouseCameraView) => void) | null>(null);
   const latestPresetRef = useRef(preset);
   const latestWorkerPointRef = useRef(workerPoint);
+  const latestFacingRef = useRef(workerFacingYaw);
   latestPresetRef.current = preset;
   latestWorkerPointRef.current = workerPoint;
+  latestFacingRef.current = workerFacingYaw;
   const baseZoom = getWarehouseCameraBaseZoom(size.width, size.height);
   // Renderer-only bookkeeping: whether the automatic shot currently owns the
   // camera. A user gesture drops it, which is what stops the story from
@@ -229,6 +256,7 @@ export function InteractiveWarehouseCamera({
       latestPresetRef.current,
       baseZoom,
       latestWorkerPointRef.current,
+      latestFacingRef.current,
     );
 
     if (storyFocus) {
@@ -254,6 +282,7 @@ export function InteractiveWarehouseCamera({
       preset,
       baseZoom,
       latestWorkerPointRef.current,
+      latestFacingRef.current,
     );
     applyViewRef.current(view);
     channel.publish(view, instanceId);
@@ -1075,6 +1104,221 @@ function OperatorAssetFigure({
 }
 
 /** The handheld scanner the imported operator carries; the model has none. */
+/**
+ * The rigged operator: one cached load, one clone per viewport so Worker and
+ * Recommended never share mutable skeleton state, and a mixer used purely as a
+ * pose sampler. Nothing here advances on its own -- the walk and idle clips are
+ * set to times the simulation snapshot dictates, then applied with a zero-delta
+ * update. There is no second clock and no extra render loop.
+ */
+/** Registry is the single source of the operator's rendered height. */
+const OPERATOR_ENVELOPE_SPAN = getWarehouseAssetEntry("operator-rigged")?.envelopeSpan ?? 1.76;
+
+/** Scratch objects for bone snapping; allocating per frame would be wasteful. */
+const BONE_POSITION = new Vector3();
+const BONE_QUATERNION = new Quaternion();
+const BONE_PARENT_QUATERNION = new Quaternion();
+
+function RiggedOperatorFigure({
+  scene,
+  animations,
+  targetHeight,
+  gait,
+}: {
+  scene: Group;
+  animations: readonly AnimationClip[];
+  /** Stature the operator is drawn at; the enclosing group adds the zoom LOD. */
+  targetHeight: number;
+  gait: WarehouseOperatorGait;
+}) {
+  const { invalidate } = useThree();
+  const scannerRef = useRef<Group>(null);
+  const hatRef = useRef<Group>(null);
+
+  const rig = useMemo(() => {
+    const clone = SkeletonUtils.clone(scene) as Group;
+    clone.traverse((object) => {
+      const mesh = object as Mesh;
+      if (!mesh.isMesh) return;
+      mesh.castShadow = WAREHOUSE_3D_MATERIALS.shadowCasters.worker;
+      const dress = (material: MeshStandardMaterial, name: string) => {
+        // PPE is a renderer decision; the file keeps its author's colours.
+        material.color.set(getWarehouseOperatorPartColor(
+          name,
+          `#${material.color.getHexString()}`,
+        ));
+        material.depthTest = WAREHOUSE_WORKER_DEPTH_POLICY.body.depthTest;
+        material.depthWrite = WAREHOUSE_WORKER_DEPTH_POLICY.body.depthWrite;
+        return material;
+      };
+
+      const source = mesh.material as MeshStandardMaterial;
+      if (source.name !== "Skin") {
+        dress(source, source.name);
+        return;
+      }
+
+      // The shipped model wears shorts. Re-group its bare legs so they can be
+      // dressed as trousers; the vertices, joints, and weights are untouched.
+      mesh.updateWorldMatrix(true, false);
+      const split = splitGeometryGroupsByHeight(
+        mesh.geometry,
+        mesh.matrixWorld,
+        WAREHOUSE_OPERATOR_TROUSER_LINE,
+      );
+      mesh.material = split
+        ? [dress(source, "Skin"), dress(source.clone(), "Workwear")]
+        : dress(source, "Skin");
+    });
+
+    const mixer = new AnimationMixer(clone);
+    const action = (name: string) => {
+      const clip = animations.find((candidate) => candidate.name.includes(name));
+      if (!clip) return null;
+      const created = mixer.clipAction(clip);
+      created.play();
+      return created;
+    };
+
+    const bones: Record<string, Object3D | null> = { hand: null, head: null };
+    clone.traverse((object) => {
+      if (object.name === WAREHOUSE_OPERATOR_BONES.hand) bones.hand = object;
+      if (object.name === WAREHOUSE_OPERATOR_BONES.head) bones.head = object;
+    });
+
+    const idle = action(WAREHOUSE_OPERATOR_CLIPS.idle);
+
+    /**
+     * Measure the figure the way it will actually be drawn: skinned, in its
+     * rest pose. A rigged model's bind-pose bounding box is not its stature --
+     * for this rig it overstates it by nearly two, which rendered a half-height
+     * operator whose (correct) walk cycle moved only a couple of pixels.
+     */
+    if (idle) { idle.time = 0; idle.setEffectiveWeight(1); }
+    mixer.update(0);
+    clone.updateMatrixWorld(true);
+
+    const bounds = new Box3();
+    const vertex = new Vector3();
+    clone.traverse((object) => {
+      const mesh = object as SkinnedMesh;
+      if (!mesh.isSkinnedMesh) return;
+      mesh.skeleton.update();
+      const position = mesh.geometry.getAttribute("position");
+      for (let i = 0; i < position.count; i += 1) {
+        vertex.fromBufferAttribute(position, i);
+        mesh.applyBoneTransform(i, vertex);
+        vertex.applyMatrix4(mesh.matrixWorld);
+        bounds.expandByPoint(vertex);
+      }
+    });
+    const stature = bounds.max.y - bounds.min.y;
+
+    return {
+      clone,
+      mixer,
+      idle,
+      hand: bones.hand,
+      head: bones.head,
+      calibration: createWarehouseAnatomicalCalibration(clone),
+      stature: stature > 0 ? stature : 1,
+      groundOffset: Number.isFinite(bounds.min.y) ? bounds.min.y : 0,
+    };
+  }, [animations, scene]);
+
+  // The enclosing group already applies the zoom LOD, so this is model units to
+  // world units only. Multiplying by it again here squared the LOD and rendered
+  // a half-height operator at every zoom below maximum.
+  const scale = getWarehouseOperatorBodyScale(rig.stature, targetHeight);
+
+  useEffect(() => () => { rig.mixer.stopAllAction(); }, [rig]);
+
+  /**
+   * The only place animation time is written, and it is written from snapshot
+   * truth: same simulation state in, same pose out, on every seek and replay.
+   * Accessories are then snapped onto their bones, so the scanner rides the
+   * swinging hand instead of floating beside it.
+   */
+  useLayoutEffect(() => {
+    const { mixer, idle } = rig;
+    if (idle) {
+      idle.time = gait.walkWeight > 0 ? 0 : gait.idleTimeSeconds;
+      idle.setEffectiveWeight(1);
+    }
+    mixer.update(0);
+
+    if (gait.walkWeight > 0) {
+      applyWarehouseAnatomicalGaitPose(
+        rig.calibration,
+        createWarehouseReferenceGaitPose(gait.gaitCycles),
+        gait.walkWeight,
+      );
+    }
+
+    rig.clone.updateMatrixWorld(true);
+
+    // Accessories live in the figure's own world-unit space, so they are placed
+    // from the bone and sized by the zoom LOD only -- never by the model's
+    // internal units, which are two orders of magnitude away.
+    for (const [bone, holder] of [
+      [rig.hand, scannerRef.current],
+      [rig.head, hatRef.current],
+    ] as const) {
+      const parent = holder?.parent;
+      if (!bone || !holder || !parent) continue;
+      parent.updateWorldMatrix(true, false);
+      bone.updateWorldMatrix(true, false);
+      holder.position.copy(parent.worldToLocal(bone.getWorldPosition(BONE_POSITION)));
+      holder.quaternion.copy(parent.getWorldQuaternion(BONE_PARENT_QUATERNION).invert()
+        .multiply(bone.getWorldQuaternion(BONE_QUATERNION)));
+      holder.scale.setScalar(1);
+    }
+
+    invalidate();
+  }, [gait, invalidate, rig]);
+
+  return (
+    <>
+      <primitive
+        object={rig.clone}
+        scale={[scale, scale, scale]}
+        position={[0, -rig.groundOffset * scale, 0]}
+      />
+      <group ref={scannerRef}>
+        <mesh castShadow={false}>
+          <boxGeometry args={[0.05, 0.11, 0.045]} />
+          <meshStandardMaterial
+            color={WAREHOUSE_WORKER_COLORS.equipment}
+            roughness={0.62}
+            metalness={0.1}
+          />
+        </mesh>
+        <mesh position={[0, 0.055, 0.02]}>
+          <boxGeometry args={[0.042, 0.026, 0.03]} />
+          <meshStandardMaterial color={WAREHOUSE_WORKER_COLORS.scannerHead} roughness={0.5} />
+        </mesh>
+      </group>
+      <group ref={hatRef}>
+        <mesh
+          position={[0, WAREHOUSE_OPERATOR_HAT.lift, 0]}
+          castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.worker}
+        >
+          <sphereGeometry args={[
+            WAREHOUSE_OPERATOR_HAT.shellRadius, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2,
+          ]} />
+          <meshStandardMaterial color={WAREHOUSE_WORKER_COLORS.safety} roughness={0.5} />
+        </mesh>
+        <mesh position={[0, WAREHOUSE_OPERATOR_HAT.lift + 0.004, WAREHOUSE_OPERATOR_HAT.brimReach]}>
+          <boxGeometry args={[
+            WAREHOUSE_OPERATOR_HAT.shellRadius * 1.5, 0.014, WAREHOUSE_OPERATOR_HAT.brimDepth,
+          ]} />
+          <meshStandardMaterial color={WAREHOUSE_WORKER_COLORS.safety} roughness={0.5} />
+        </mesh>
+      </group>
+    </>
+  );
+}
+
 function OperatorScanner({ scanner }: { scanner: WarehouseOperatorScanner }) {
   return (
     <group position={scanner.position} rotation={[0, scanner.yawRadians, 0]}>
@@ -1121,15 +1365,42 @@ function WorkerMarker({
     () => createWarehouseWorkerVisual(color, gesture, figureScale),
     [color, figureScale, gesture],
   );
-  const operator = useWarehouseAsset("operator");
+  const rigged = useWarehouseAsset("operator-rigged");
+  // Routing destinations, so the gait knows when the operator is turning off
+  // the aisle onto the short spur in front of a bin and should settle.
+  const attachmentIds = useMemo(
+    () => new Set([graph.start.id, ...graph.locations.map((location) => location.id)]),
+    [graph],
+  );
+  const clipTiming = useMemo(() => {
+    const duration = (name: string) =>
+      rigged.animations.find((clip) => clip.name.includes(name))?.duration ?? 0;
+    return {
+      walkDurationSeconds: WORKER_REFERENCE_GAIT_CYCLE_SECONDS,
+      idleDurationSeconds: duration(WAREHOUSE_OPERATOR_CLIPS.idle),
+    };
+  }, [rigged.animations]);
+  const gait = useMemo(
+    () => createWarehouseOperatorGait(snapshot, clipTiming, attachmentIds),
+    [attachmentIds, clipTiming, snapshot],
+  );
+  // Only fetched if the rigged operator actually failed: an unregistered id
+  // resolves to the fallback handle without touching the network.
+  const operator = useWarehouseAsset(rigged.status === "error" ? "operator" : "");
   const operatorScanner = useMemo(() => createWarehouseOperatorScanner(gesture), [gesture]);
-  // The imported operator scans from its own hand; the procedural figure keeps
-  // emitting from the scan head its own pose already produces.
-  const importedOperator = operator.status === "ready" && operator.parts !== null
-    && operator.normalization !== null;
+
+  // Fallback ladder: rigged human, then the static baked human, then the
+  // procedural figure. Each rung is a complete operator on its own.
+  const riggedReady = rigged.status === "ready" && rigged.scene !== null
+    && rigged.naturalSize !== null && rigged.animations.length > 0;
+  const importedOperator = !riggedReady && operator.status === "ready"
+    && operator.parts !== null && operator.normalization !== null;
   const scanCue = useMemo(
-    () => createWarehouseWorkerScanCue(gesture, importedOperator ? operatorScanner.head : undefined),
-    [gesture, importedOperator, operatorScanner],
+    () => createWarehouseWorkerScanCue(
+      gesture,
+      riggedReady || importedOperator ? operatorScanner.head : undefined,
+    ),
+    [gesture, importedOperator, operatorScanner, riggedReady],
   );
 
   return (
@@ -1142,25 +1413,36 @@ function WorkerMarker({
         <ringGeometry args={[
           WAREHOUSE_3D_VISUALS.worker.ringInnerRadius,
           WAREHOUSE_3D_VISUALS.worker.ringOuterRadius,
-          24,
+          32,
         ]} />
-        <meshBasicMaterial color={color} depthTest={false} depthWrite={false} />
+        <meshBasicMaterial
+          color={color}
+          transparent
+          opacity={WAREHOUSE_3D_VISUALS.worker.ringOpacity}
+          depthTest={false}
+          depthWrite={false}
+        />
       </mesh>
       <group
         rotation={[0, pose.yawRadians, 0]}
         scale={[visual.figureScale, visual.figureScale, visual.figureScale]}
       >
-        {importedOperator ? (
-          <>
-            <OperatorAssetFigure
-              parts={operator.parts as readonly WarehouseAssetPart[]}
-              scale={(operator.normalization?.scale ?? 1) * visual.figureScale}
-            />
-            <OperatorScanner scanner={operatorScanner} />
-          </>
+        {riggedReady ? (
+          <RiggedOperatorFigure
+            scene={rigged.scene as Group}
+            animations={rigged.animations}
+            targetHeight={OPERATOR_ENVELOPE_SPAN}
+            gait={gait}
+          />
+        ) : importedOperator ? (
+          <OperatorAssetFigure
+            parts={operator.parts as readonly WarehouseAssetPart[]}
+            scale={operator.normalization?.scale ?? 1}
+          />
         ) : (
           visual.parts.map((part) => <WorkerVisualPartMesh key={part.id} part={part} />)
         )}
+        {riggedReady || importedOperator ? <OperatorScanner scanner={operatorScanner} /> : null}
         {scanCue ? <WorkerScanCue cue={scanCue} /> : null}
       </group>
       {/* Small depth-independent pip so the operator stays locatable behind racking. */}
@@ -1244,6 +1526,14 @@ function Warehouse3DScene({
   const coordinates = useMemo(() => buildCoordinateLookup(graph), [graph]);
   // The operator and the walking overlay stand in the aisle, not inside the bin.
   const operatorCoordinates = useMemo(() => buildOperatorCoordinateLookup(graph), [graph]);
+  // Worker focus swings behind this heading, so it looks along the operator's
+  // own aisle rather than across the racking.
+  const workerFacingYaw = useMemo(
+    () => createWarehouseWorkerPose(
+      graph, timeline, snapshot, transform, operatorCoordinates,
+    ).yawRadians,
+    [graph, operatorCoordinates, snapshot, timeline, transform],
+  );
   const routeIds = useMemo(() => new Set(timeline.order.slice(1)), [timeline.order]);
   const activeService = useMemo(
     () => createWarehouseActiveServiceVisual(snapshot, transform, coordinates),
@@ -1302,6 +1592,7 @@ function Warehouse3DScene({
         authority={cameraAuthority}
         instanceId={cameraInstanceId}
         workerPoint={workerPoint}
+        workerFacingYaw={workerFacingYaw}
         onZoomBucketChange={handleZoomBucketChange}
         storyFocus={storyFocus}
         onUserCameraInteraction={handleUserCameraInteraction}

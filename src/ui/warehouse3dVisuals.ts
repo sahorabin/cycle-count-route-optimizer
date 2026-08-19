@@ -46,8 +46,14 @@ export const WAREHOUSE_3D_VISUALS = {
   },
   worker: {
     discRadius: 0.24,
-    ringInnerRadius: 0.22,
-    ringOuterRadius: 0.3,
+    /**
+     * The locator sits at ankle height and draws over the operator, so a heavy
+     * ring hides exactly the part of the body a walk is read from. Thin and
+     * semi-transparent keeps the operator findable without masking the feet.
+     */
+    ringInnerRadius: 0.24,
+    ringOuterRadius: 0.265,
+    ringOpacity: 0.34,
     bodyTopRadius: 0.165,
     bodyBottomRadius: 0.19,
     bodyHeight: 0.57,
