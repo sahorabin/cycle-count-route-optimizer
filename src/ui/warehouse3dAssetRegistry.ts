@@ -81,18 +81,32 @@ export const WAREHOUSE_ASSET_REGISTRY: readonly WarehouseAssetEntry[] = [
   {
     id: "pallet",
     category: "pallet",
-    file: null,
-    provenance: PROCEDURAL,
+    file: "/assets/warehouse/wooden_pallet_01/wooden_pallet_01.gltf",
+    provenance: {
+      source: "https://opengameart.org/content/cc0-crates-wooden-pallet",
+      license: "CC0",
+      redistributable: true,
+      attribution: "Wooden pallet by Lucian Pavel (OpenGameArt), CC0",
+      commercialUse: true,
+    },
     envelopeSpan: 0.45,
-    note: "Procedural pallet block placed deterministically inside rack bays.",
+    note: "Real CC0 wooden pallet, uniformly scaled into each existing pallet "
+      + "descriptor; the procedural block remains the fallback.",
   },
   {
     id: "carton",
     category: "carton",
-    file: null,
-    provenance: PROCEDURAL,
+    file: "/assets/warehouse/cardboard_box_01/cardboard_box_01_1k.gltf",
+    provenance: {
+      source: "https://polyhaven.com/a/cardboard_box_01",
+      license: "CC0",
+      redistributable: true,
+      attribution: "Cardboard Box 01 by Rahul Chaudhary (Poly Haven), CC0",
+      commercialUse: true,
+    },
     envelopeSpan: 0.4,
-    note: "Procedural carton load; deterministic per bay from a stable hash.",
+    note: "Real CC0 corrugated shipping carton, uniformly scaled onto the "
+      + "pallet below it; the procedural block remains the fallback.",
   },
   {
     id: "operator",

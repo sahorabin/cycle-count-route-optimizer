@@ -1,0 +1,32 @@
+Wooden Pallet 01
+================
+
+Source:        https://opengameart.org/content/cc0-crates-wooden-pallet
+Author:        Lucian Pavel
+License:       CC0 (the submission's stated licence; its attribution notice
+               reads "Public Domain")
+License text:  https://creativecommons.org/publicdomain/zero/1.0/
+Redistribution: Permitted. CC0 places the work in the public domain; no
+                permission or attribution is required. Attribution is given
+                here as a courtesy to the author.
+Commercial use: Permitted.
+
+Modifications made for this project (permitted under CC0):
+  - The "WoodenPallet" object from the pack's Crates.zip was converted from
+    Wavefront OBJ to glTF 2.0 (quads triangulated, vertices de-duplicated,
+    texture V axis flipped for glTF UV orientation). Geometry is unchanged.
+  - The 1024x1024 PNG diffuse map was resized to 512x512 and re-encoded as
+    JPEG for web delivery. The pack's normal and specular maps are not used.
+
+Files in this directory:
+  wooden_pallet_01.gltf                   1,894 bytes
+  wooden_pallet_01.bin                   12,600 bytes
+  textures/wooden_pallet_01_diff_512.jpg 47,147 bytes
+  Total                                    ~62 KB
+
+Geometry: 1 mesh, 1 material, 180 triangles.
+Retrieved: 2026-08-19 from opengameart.org.
+
+Used in this project as the warehouse pallet asset. It is presentation only:
+warehouse layout, routing, timing, and KPI truth never read asset geometry.
+No inventory, SKU, quantity, or label data is derived from or applied to it.

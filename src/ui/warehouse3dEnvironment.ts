@@ -64,6 +64,12 @@ export interface WarehousePropVisual extends WarehouseEnvironmentBoxVisual {
   readonly kind: "pallet" | "carton";
   readonly minimumDetail: WarehouseLocationDetailLevel;
   readonly rackId: string;
+  /**
+   * Id of the prop this one stands on, when it stands on one at all. Renderers
+   * use it to ground a carton on whatever height the pallet below actually
+   * ends up with; it carries no inventory or operational meaning.
+   */
+  readonly supportedBy?: string;
 }
 
 export interface WarehouseAisleVisual {
@@ -235,7 +241,10 @@ function buildRackVisual(
       const seed = stableHash(`${id}:${bayIndex}:${levelIndex}`);
       if (seed % 7 > 2) return;
       const palletHeight = 0.045;
-      const palletWidth = Math.max(postSize, width * 0.68);
+      // Share of the run's depth a load occupies. Uniformly scaled assets are
+      // limited by this axis, so it decides how big storage reads; both values
+      // stay inside the footprint and never reach the aisle.
+      const palletWidth = Math.max(postSize, width * 0.9);
       const palletDepth = Math.max(postSize, bayDepth * 0.68);
       const minimumDetail: WarehouseLocationDetailLevel = seed % 17 === 0
         ? "overview"
@@ -259,11 +268,12 @@ function buildRackVisual(
           `${id}-carton-${bayIndex}-${levelIndex}`,
           "carton",
           [centerX, level + palletHeight + cartonHeight / 2, bayCenterZ + zOffset],
-          [width * 0.55, cartonHeight, bayDepth * 0.42],
+          [width * 0.72, cartonHeight, bayDepth * 0.42],
         ),
         kind: "carton",
         minimumDetail: "close",
         rackId: id,
+        supportedBy: `${id}-pallet-${bayIndex}-${levelIndex}`,
       });
     });
   }
@@ -477,6 +487,7 @@ function buildFloorProps(transform: Warehouse3DTransform): WarehousePropVisual[]
       kind: "carton",
       minimumDetail: "overview",
       rackId: "staging",
+      supportedBy: `floor-pallet-${index}`,
     });
   });
 

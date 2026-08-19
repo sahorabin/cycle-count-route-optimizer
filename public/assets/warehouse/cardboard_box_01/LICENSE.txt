@@ -1,0 +1,26 @@
+Cardboard Box 01
+================
+
+Source:        https://polyhaven.com/a/cardboard_box_01
+Author:        Rahul Chaudhary (Poly Haven)
+License:       CC0 1.0 Universal (Public Domain Dedication)
+License text:  https://polyhaven.com/license
+Redistribution: Permitted. CC0 places the work in the public domain; no
+                permission or attribution is required. Attribution is given
+                here as a courtesy to the author.
+Commercial use: Permitted.
+
+Files in this directory (glTF 2.0, 1K texture set, unmodified as downloaded):
+  cardboard_box_01_1k.gltf                2,903 bytes
+  cardboard_box_01.bin                  381,936 bytes
+  textures/..._diff_1k.jpg              567,741 bytes
+  textures/..._nor_gl_1k.jpg            817,424 bytes
+  textures/..._arm_1k.jpg               398,433 bytes
+  Total                                  ~2.2 MB
+
+Geometry: 1 mesh, 1 material, 16,952 triangles.
+Retrieved: 2026-08-19 from dl.polyhaven.org.
+
+Used in this project as the warehouse carton asset. It is presentation only:
+warehouse layout, routing, timing, and KPI truth never read asset geometry.
+No inventory, SKU, quantity, or label data is derived from or applied to it.

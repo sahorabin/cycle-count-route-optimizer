@@ -7,6 +7,7 @@ import type { NodeId, RouteTimeline, WarehouseGraph } from "../domain/types";
 import type { SimulationSnapshot } from "../simulation/types";
 import { buildCoordinateLookup, type Point } from "../ui/svgPoints";
 import { useWarehouseAsset } from "../ui/warehouse3dAssetLoader";
+import { buildWarehouseStorageRenderSet } from "../ui/warehouse3dStorage";
 import {
   createWarehouseActiveServiceVisual,
   createWarehouseServiceCompletionVisual,
@@ -437,18 +438,28 @@ const WarehouseRacks = memo(function WarehouseRacks({
     [detailLevel, environment],
   );
   const rackAsset = useWarehouseAsset("rack-run");
+  const palletAsset = useWarehouseAsset("pallet");
+  const cartonAsset = useWarehouseAsset("carton");
   const { geometry, material } = rackAsset;
   // The imported rack is the primary representation; the procedural frame is
   // what the warehouse falls back to when the asset cannot load.
   const importedRack = rackAsset.status === "ready" && geometry !== null && material !== null;
+
+  // Storage assets resolve per category, so one failed model never removes the
+  // other and never removes the procedural fallback underneath both.
+  const storage = useMemo(
+    () => buildWarehouseStorageRenderSet(renderSet.storageProps, {
+      pallet: palletAsset.naturalSize,
+      carton: cartonAsset.naturalSize,
+    }),
+    [cartonAsset.naturalSize, palletAsset.naturalSize, renderSet.storageProps],
+  );
 
   const uprights = renderSet.rackMembers.filter((visual) => visual.kind === "rack-upright");
   const beams = renderSet.rackMembers.filter((visual) => visual.kind === "rack-beam");
   const shelves = renderSet.rackMembers.filter((visual) => visual.kind === "rack-shelf");
   const bases = renderSet.rackMembers.filter((visual) => visual.kind === "rack-base");
   const guards = renderSet.rackMembers.filter((visual) => visual.kind === "rack-guard");
-  const pallets = renderSet.storageProps.filter((visual) => visual.kind === "pallet");
-  const cartons = renderSet.storageProps.filter((visual) => visual.kind === "carton");
 
   return (
     <>
@@ -491,13 +502,29 @@ const WarehouseRacks = memo(function WarehouseRacks({
         {...WAREHOUSE_3D_MATERIALS.rackGuard}
         castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.rackGuard}
       />
+      {palletAsset.geometry && palletAsset.material ? (
+        <InstancedAssetMeshes
+          visuals={storage.assetPallets}
+          geometry={palletAsset.geometry}
+          material={palletAsset.material}
+          castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.pallet}
+        />
+      ) : null}
+      {cartonAsset.geometry && cartonAsset.material ? (
+        <InstancedAssetMeshes
+          visuals={storage.assetCartons}
+          geometry={cartonAsset.geometry}
+          material={cartonAsset.material}
+          castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.carton}
+        />
+      ) : null}
       <InstancedEnvironmentBoxes
-        visuals={pallets}
+        visuals={storage.proceduralPallets}
         {...WAREHOUSE_3D_MATERIALS.pallet}
         castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.pallet}
       />
       <InstancedEnvironmentBoxes
-        visuals={cartons}
+        visuals={storage.proceduralCartons}
         {...WAREHOUSE_3D_MATERIALS.carton}
         castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.carton}
       />

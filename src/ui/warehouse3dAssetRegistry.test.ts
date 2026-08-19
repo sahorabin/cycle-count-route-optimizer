@@ -173,7 +173,8 @@ describe("real rack asset", () => {
     expect(Object.keys(assetText)).toContain(`/public${entry?.file}`);
     expect(Object.keys(assetText)).toContain(`${ASSET_ROOT}/LICENSE.txt`);
     expect(Object.keys(assetBinaries)).toContain(`${ASSET_ROOT}/steel_frame_shelves_01.bin`);
-    expect(Object.keys(assetBinaries).filter((key) => key.endsWith(".jpg"))).toHaveLength(3);
+    expect(Object.keys(assetBinaries)
+      .filter((key) => key.startsWith(ASSET_ROOT) && key.endsWith(".jpg"))).toHaveLength(3);
   });
 
   test("ships one small mesh with one material, so racks can share it", () => {
@@ -241,5 +242,122 @@ describe("imported geometry normalization", () => {
 
   test("reports null for degenerate geometry instead of NaN placement", () => {
     expect(normalizeAssetGeometryToUnitBox(new BoxGeometry(1, 0, 1))).toBeNull();
+  });
+});
+
+describe("real storage assets", () => {
+  const pallet = getWarehouseAssetEntry("pallet");
+  const carton = getWarehouseAssetEntry("carton");
+
+  test("registers a real pallet and a real carton as the storage representation", () => {
+    expect(pallet?.file).toBe("/assets/warehouse/wooden_pallet_01/wooden_pallet_01.gltf");
+    expect(carton?.file).toBe("/assets/warehouse/cardboard_box_01/cardboard_box_01_1k.gltf");
+    expect(hasWarehouseAssetFile("pallet")).toBe(true);
+    expect(hasWarehouseAssetFile("carton")).toBe(true);
+  });
+
+  test("ships every storage file the registry points at, plus its licence", () => {
+    for (const entry of [pallet, carton]) {
+      const file = entry?.file as string;
+      const directory = `/public${file}`.replace(/\/[^/]+$/, "");
+      expect(Object.keys(assetText)).toContain(`/public${file}`);
+      expect(Object.keys(assetText)).toContain(`${directory}/LICENSE.txt`);
+    }
+    expect(Object.keys(assetBinaries))
+      .toContain("/public/assets/warehouse/wooden_pallet_01/wooden_pallet_01.bin");
+    expect(Object.keys(assetBinaries))
+      .toContain("/public/assets/warehouse/cardboard_box_01/cardboard_box_01.bin");
+  });
+
+  test("records verified CC0 provenance for both storage assets", () => {
+    const palletLicence = assetText["/public/assets/warehouse/wooden_pallet_01/LICENSE.txt"];
+    const cartonLicence = assetText["/public/assets/warehouse/cardboard_box_01/LICENSE.txt"];
+
+    for (const entry of [pallet, carton]) {
+      expect(entry?.provenance.license).toBe("CC0");
+      expect(entry?.provenance.redistributable).toBe(true);
+      expect(entry?.provenance.commercialUse).toBe(true);
+      expect(entry?.provenance.source).toMatch(/^https:\/\//);
+      expect(entry?.provenance.attribution).not.toBeNull();
+    }
+    expect(palletLicence).toContain("CC0");
+    expect(palletLicence).toContain("Lucian Pavel");
+    // Conversion from OBJ is a modification, and CC0 permits it -- but it has
+    // to be disclosed next to the file rather than quietly performed.
+    expect(palletLicence).toContain("glTF 2.0");
+    expect(cartonLicence).toContain("CC0");
+    expect(cartonLicence).toContain("Rahul Chaudhary");
+  });
+
+  test("keeps neutral packaging: no invented SKU, quantity, or label data", () => {
+    for (const entry of [pallet, carton]) {
+      expect(entry?.note).not.toMatch(/sku|barcode|quantity|part number|supplier/i);
+    }
+    for (const licence of [
+      assetText["/public/assets/warehouse/wooden_pallet_01/LICENSE.txt"],
+      assetText["/public/assets/warehouse/cardboard_box_01/LICENSE.txt"],
+    ]) {
+      expect(licence).toContain("No inventory, SKU, quantity, or label data");
+    }
+  });
+
+  test("ships one small mesh and one material per storage asset", () => {
+    for (const file of [pallet?.file, carton?.file]) {
+      const gltf = JSON.parse(assetText[`/public${file}`]);
+      expect(gltf.meshes).toHaveLength(1);
+      expect(gltf.materials).toHaveLength(1);
+      // Neither may be metallic: glTF metalness renders near-black here.
+      expect(gltf.materials[0].pbrMetallicRoughness.metallicFactor ?? 1).toBe(0);
+    }
+  });
+
+  test("keeps the converted pallet buffer internally consistent", () => {
+    // This asset was converted from OBJ by this repository, so its accessors
+    // are ours to get wrong. A silently broken buffer would fall back to
+    // procedural storage and look like nothing happened.
+    const gltf = JSON.parse(assetText["/public/assets/warehouse/wooden_pallet_01/wooden_pallet_01.gltf"]);
+    const buffer = gltf.buffers[0];
+    const componentSize: Record<number, number> = { 5123: 2, 5126: 4 };
+    const componentCount: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3 };
+
+    for (const accessor of gltf.accessors) {
+      const view = gltf.bufferViews[accessor.bufferView];
+      const bytes = accessor.count * componentCount[accessor.type]
+        * componentSize[accessor.componentType];
+      expect({ type: accessor.type, fits: bytes <= view.byteLength }).toEqual({
+        type: accessor.type, fits: true,
+      });
+      expect(view.byteOffset + view.byteLength).toBeLessThanOrEqual(buffer.byteLength);
+    }
+
+    const [position, , uv, indices] = gltf.accessors;
+    expect(uv.count).toBe(position.count);
+    expect(indices.count % 3).toBe(0);
+    // 16-bit indices must still address every vertex.
+    expect(position.count).toBeLessThan(65536);
+    expect(position.min.every((value: number) => Number.isFinite(value))).toBe(true);
+    expect(position.max.map((value: number, axis: number) => value - position.min[axis])
+      .every((span: number) => span > 0)).toBe(true);
+  });
+
+  test("falls back per storage category when an asset cannot load", async () => {
+    clearWarehouseAssetCache();
+
+    // Node has no fetch for these paths, so both take the real failure path.
+    for (const id of ["pallet", "carton"]) {
+      const handle = await loadWarehouseAsset(id);
+      expect({ id, status: handle.status }).not.toEqual({ id, status: "ready" });
+      expect(handle.naturalSize).toBeNull();
+      expect(handle.geometry).toBeNull();
+    }
+  });
+
+  test("loads each storage asset once however many bays reuse it", () => {
+    clearWarehouseAssetCache();
+
+    expect(loadWarehouseAsset("pallet")).toBe(loadWarehouseAsset("pallet"));
+    expect(loadWarehouseAsset("carton")).toBe(loadWarehouseAsset("carton"));
+    // Categories stay independent: one shared handle each, never one shared load.
+    expect(loadWarehouseAsset("pallet")).not.toBe(loadWarehouseAsset("carton"));
   });
 });

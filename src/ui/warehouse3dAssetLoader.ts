@@ -21,6 +21,12 @@ export interface WarehouseAssetHandle {
    */
   readonly geometry: BufferGeometry | null;
   readonly material: Material | null;
+  /**
+   * World-space size of the source model before unit normalization. Callers that
+   * must preserve an object's proportions (a pallet, a carton) scale this by one
+   * uniform factor rather than stretching it per axis.
+   */
+  readonly naturalSize: readonly [number, number, number] | null;
 }
 
 const FALLBACK: WarehouseAssetHandle = {
@@ -29,6 +35,7 @@ const FALLBACK: WarehouseAssetHandle = {
   normalization: null,
   geometry: null,
   material: null,
+  naturalSize: null,
 };
 
 const FAILED: WarehouseAssetHandle = { ...FALLBACK, status: "error" };
@@ -128,6 +135,7 @@ export function loadWarehouseAsset(id: string): Promise<WarehouseAssetHandle> {
         scene: gltf.scene,
         geometry: normalized.geometry,
         material: clampAssetMaterial(source.material),
+        naturalSize: [size.x, size.y, size.z],
         normalization: normalizeAssetToEnvelope(
           { width: size.x, height: size.y, depth: size.z },
           entry.envelopeSpan,
