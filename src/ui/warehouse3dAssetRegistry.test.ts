@@ -91,16 +91,17 @@ describe("asset normalization", () => {
 });
 
 describe("asset loading fallback", () => {
-  test("resolves to the procedural fallback for every category without a file", async () => {
+  test("resolves to the procedural fallback for any category without a file", async () => {
     clearWarehouseAssetCache();
 
-    for (const entry of WAREHOUSE_ASSET_REGISTRY.filter(({ file }) => !file)) {
-      const handle = await loadWarehouseAsset(entry.id);
-      expect({ id: entry.id, status: handle.status }).toEqual({ id: entry.id, status: "fallback" });
-      expect(handle.scene).toBeNull();
-      expect(handle.geometry).toBeNull();
-      expect(handle.material).toBeNull();
-    }
+    // Every category now ships a file, so the fallback path is exercised with a
+    // synthetic id rather than a vacuous filter over an empty list.
+    const handle = await loadWarehouseAsset("category-with-no-file");
+    expect(handle.status).toBe("fallback");
+    expect(handle.scene).toBeNull();
+    expect(handle.geometry).toBeNull();
+    expect(handle.parts).toBeNull();
+    expect(WAREHOUSE_ASSET_REGISTRY.every((entry) => entry.file !== null)).toBe(true);
   });
 
   test("survives an asset that cannot be fetched or parsed", async () => {
@@ -359,5 +360,133 @@ describe("real storage assets", () => {
     expect(loadWarehouseAsset("carton")).toBe(loadWarehouseAsset("carton"));
     // Categories stay independent: one shared handle each, never one shared load.
     expect(loadWarehouseAsset("pallet")).not.toBe(loadWarehouseAsset("carton"));
+  });
+});
+
+const WORKER_ROOT = "/public/assets/worker/quaternius_man_01";
+
+const workerText = import.meta.glob("/public/assets/worker/**/*.{gltf,txt}", {
+  eager: true,
+  query: "?raw",
+  import: "default",
+}) as Record<string, string>;
+
+const workerBinaries = import.meta.glob("/public/assets/worker/**/*.bin", {
+  eager: true,
+  query: "?url",
+  import: "default",
+}) as Record<string, string>;
+
+describe("real worker asset", () => {
+  const operator = getWarehouseAssetEntry("operator");
+  const gltf = JSON.parse(workerText[`${WORKER_ROOT}/quaternius_man_01.gltf`]);
+
+  test("registers a real human as the operator representation", () => {
+    expect(operator?.category).toBe("worker");
+    expect(operator?.file).toBe("/assets/worker/quaternius_man_01/quaternius_man_01.gltf");
+    expect(hasWarehouseAssetFile("operator")).toBe(true);
+  });
+
+  test("ships the model, its buffer, and its licence", () => {
+    expect(Object.keys(workerText)).toContain(`/public${operator?.file}`);
+    expect(Object.keys(workerText)).toContain(`${WORKER_ROOT}/LICENSE.txt`);
+    expect(Object.keys(workerBinaries)).toContain(`${WORKER_ROOT}/quaternius_man_01.bin`);
+  });
+
+  test("records verified CC0 provenance and discloses every modification", () => {
+    const licence = workerText[`${WORKER_ROOT}/LICENSE.txt`];
+
+    expect(operator?.provenance.license).toBe("CC0");
+    expect(operator?.provenance.redistributable).toBe(true);
+    expect(operator?.provenance.commercialUse).toBe(true);
+    expect(operator?.provenance.source).toContain("poly.pizza");
+    expect(operator?.provenance.attribution).toContain("Quaternius");
+    expect(licence).toContain("CC0");
+    expect(licence).toContain("Quaternius");
+    // Posing and partitioning are modifications; CC0 allows them, honesty requires
+    // that they are written down next to the file.
+    expect(licence).toMatch(/baked/i);
+    expect(licence).toMatch(/Workwear/);
+  });
+
+  test("ships a static posed mesh: no rig, no clips, no textures", () => {
+    expect(gltf.skins ?? []).toHaveLength(0);
+    expect(gltf.animations ?? []).toHaveLength(0);
+    expect(gltf.images ?? []).toHaveLength(0);
+    expect(gltf.meshes).toHaveLength(1);
+    // One primitive per dressable region, so PPE is a material decision.
+    expect(gltf.meshes[0].primitives.length).toBe(gltf.materials.length);
+    expect(gltf.materials.map((m: { name: string }) => m.name)).toEqual(
+      expect.arrayContaining(["Shirt", "Workwear", "Skin"]),
+    );
+  });
+
+  test("stays small enough to be a sensible interactive download", () => {
+    const triangles = gltf.meshes[0].primitives.reduce(
+      (total: number, primitive: { indices: number }) =>
+        total + gltf.accessors[primitive.indices].count / 3,
+      0,
+    );
+
+    expect(triangles).toBe(1852);
+    expect(gltf.buffers[0].byteLength).toBeLessThan(256 * 1024);
+  });
+
+  test("keeps the baked buffer internally consistent", () => {
+    // This asset was baked by this repository, so its accessors are ours to
+    // get wrong; a broken buffer would silently fall back to the procedural
+    // figure and look like nothing happened.
+    const componentSize: Record<number, number> = { 5123: 2, 5126: 4 };
+    const componentCount: Record<string, number> = { SCALAR: 1, VEC3: 3 };
+
+    for (const accessor of gltf.accessors) {
+      const view = gltf.bufferViews[accessor.bufferView];
+      const bytes = accessor.count * componentCount[accessor.type]
+        * componentSize[accessor.componentType];
+      expect({ type: accessor.type, fits: bytes <= view.byteLength })
+        .toEqual({ type: accessor.type, fits: true });
+      expect(view.byteOffset + view.byteLength).toBeLessThanOrEqual(gltf.buffers[0].byteLength);
+    }
+
+    for (const primitive of gltf.meshes[0].primitives) {
+      const position = gltf.accessors[primitive.attributes.POSITION];
+      expect(gltf.accessors[primitive.attributes.NORMAL].count).toBe(position.count);
+      expect(gltf.accessors[primitive.indices].count % 3).toBe(0);
+      expect(position.count).toBeLessThan(65536);
+    }
+  });
+
+  test("stands on the floor plane with a credible human silhouette", () => {
+    const mins = gltf.meshes[0].primitives.map(
+      (p: { attributes: { POSITION: number } }) => gltf.accessors[p.attributes.POSITION].min);
+    const maxes = gltf.meshes[0].primitives.map(
+      (p: { attributes: { POSITION: number } }) => gltf.accessors[p.attributes.POSITION].max);
+    const low = [0, 1, 2].map((axis) => Math.min(...mins.map((m: number[]) => m[axis])));
+    const high = [0, 1, 2].map((axis) => Math.max(...maxes.map((m: number[]) => m[axis])));
+    const size = [0, 1, 2].map((axis) => high[axis] - low[axis]);
+
+    // Baked standing, not T-posed: height clearly dominates arm span.
+    expect(size[1]).toBeGreaterThan(size[0] * 2.5);
+    expect(size[1]).toBeGreaterThan(size[2] * 4);
+    expect(Math.abs(low[1])).toBeLessThan(size[1] * 0.01);
+  });
+
+  test("falls back to the procedural operator when the model cannot load", async () => {
+    clearWarehouseAssetCache();
+
+    // No fetch for this path in node, so this is the real failure path.
+    const handle = await loadWarehouseAsset("operator");
+
+    expect(handle.status).not.toBe("ready");
+    expect(handle.parts).toBeNull();
+    expect(handle.naturalSize).toBeNull();
+    expect(handle.normalization).toBeNull();
+  });
+
+  test("loads the operator once however many viewports show it", () => {
+    clearWarehouseAssetCache();
+
+    // Compare renders two viewports; they must not fetch or parse twice.
+    expect(loadWarehouseAsset("operator")).toBe(loadWarehouseAsset("operator"));
   });
 });

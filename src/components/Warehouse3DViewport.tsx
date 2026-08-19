@@ -6,7 +6,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { NodeId, RouteTimeline, WarehouseGraph } from "../domain/types";
 import type { SimulationSnapshot } from "../simulation/types";
 import { buildCoordinateLookup, type Point } from "../ui/svgPoints";
-import { useWarehouseAsset } from "../ui/warehouse3dAssetLoader";
+import { useWarehouseAsset, type WarehouseAssetPart } from "../ui/warehouse3dAssetLoader";
 import { buildWarehouseStorageRenderSet } from "../ui/warehouse3dStorage";
 import {
   createWarehouseActiveServiceVisual,
@@ -57,11 +57,15 @@ import {
   type Warehouse3DRouteVisualSegment,
 } from "../ui/warehouse3dVisuals";
 import {
+  createWarehouseOperatorScanner,
   createWarehouseWorkerPose,
   createWarehouseWorkerScanCue,
   createWarehouseWorkerVisual,
+  getWarehouseOperatorPartColor,
   getWarehouseWorkerFigureScale,
   WAREHOUSE_WORKER_DEPTH_POLICY,
+  WAREHOUSE_WORKER_COLORS,
+  type WarehouseOperatorScanner,
   type WarehouseWorkerScanCue,
   type WarehouseWorkerVisualPart,
 } from "../ui/warehouse3dWorker";
@@ -1035,6 +1039,61 @@ function WorkerScanCue({ cue }: { cue: WarehouseWorkerScanCue }) {
 }
 
 
+/**
+ * The imported operator. Its pieces are grounded on y = 0 at natural scale, so
+ * one uniform factor puts a credible human next to the racking, and each piece
+ * is dressed as PPE by its source material name. Ordinary depth testing: the
+ * body is occluded by racking exactly like any other scene geometry.
+ */
+function OperatorAssetFigure({
+  parts,
+  scale,
+}: {
+  parts: readonly WarehouseAssetPart[];
+  scale: number;
+}) {
+  return (
+    <group scale={[scale, scale, scale]}>
+      {parts.map((part) => (
+        <mesh
+          key={part.name}
+          geometry={part.geometry}
+          castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.worker}
+          renderOrder={WAREHOUSE_WORKER_DEPTH_POLICY.body.renderOrder}
+        >
+          <meshStandardMaterial
+            color={getWarehouseOperatorPartColor(part.name, part.color)}
+            roughness={0.78}
+            metalness={0}
+            depthTest={WAREHOUSE_WORKER_DEPTH_POLICY.body.depthTest}
+            depthWrite={WAREHOUSE_WORKER_DEPTH_POLICY.body.depthWrite}
+          />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+/** The handheld scanner the imported operator carries; the model has none. */
+function OperatorScanner({ scanner }: { scanner: WarehouseOperatorScanner }) {
+  return (
+    <group position={scanner.position} rotation={[0, scanner.yawRadians, 0]}>
+      <mesh castShadow={false}>
+        <boxGeometry args={[0.05, 0.11, 0.045]} />
+        <meshStandardMaterial
+          color={WAREHOUSE_WORKER_COLORS.equipment}
+          roughness={0.62}
+          metalness={0.1}
+        />
+      </mesh>
+      <mesh position={[0, 0.055, 0.02]}>
+        <boxGeometry args={[0.042, 0.026, 0.03]} />
+        <meshStandardMaterial color={WAREHOUSE_WORKER_COLORS.scannerHead} roughness={0.5} />
+      </mesh>
+    </group>
+  );
+}
+
 function WorkerMarker({
   graph,
   timeline,
@@ -1062,7 +1121,16 @@ function WorkerMarker({
     () => createWarehouseWorkerVisual(color, gesture, figureScale),
     [color, figureScale, gesture],
   );
-  const scanCue = useMemo(() => createWarehouseWorkerScanCue(gesture), [gesture]);
+  const operator = useWarehouseAsset("operator");
+  const operatorScanner = useMemo(() => createWarehouseOperatorScanner(gesture), [gesture]);
+  // The imported operator scans from its own hand; the procedural figure keeps
+  // emitting from the scan head its own pose already produces.
+  const importedOperator = operator.status === "ready" && operator.parts !== null
+    && operator.normalization !== null;
+  const scanCue = useMemo(
+    () => createWarehouseWorkerScanCue(gesture, importedOperator ? operatorScanner.head : undefined),
+    [gesture, importedOperator, operatorScanner],
+  );
 
   return (
     <group position={[pose.position.x, 0, pose.position.z]}>
@@ -1082,7 +1150,17 @@ function WorkerMarker({
         rotation={[0, pose.yawRadians, 0]}
         scale={[visual.figureScale, visual.figureScale, visual.figureScale]}
       >
-        {visual.parts.map((part) => <WorkerVisualPartMesh key={part.id} part={part} />)}
+        {importedOperator ? (
+          <>
+            <OperatorAssetFigure
+              parts={operator.parts as readonly WarehouseAssetPart[]}
+              scale={(operator.normalization?.scale ?? 1) * visual.figureScale}
+            />
+            <OperatorScanner scanner={operatorScanner} />
+          </>
+        ) : (
+          visual.parts.map((part) => <WorkerVisualPartMesh key={part.id} part={part} />)
+        )}
         {scanCue ? <WorkerScanCue cue={scanCue} /> : null}
       </group>
       {/* Small depth-independent pip so the operator stays locatable behind racking. */}

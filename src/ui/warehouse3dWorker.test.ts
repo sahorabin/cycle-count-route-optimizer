@@ -7,6 +7,7 @@ import { createWarehouseCountingGesture } from "./warehouse3dServiceVisual";
 import { WAREHOUSE_3D_VISUALS } from "./warehouse3dVisuals";
 import { WAREHOUSE_WORKER_COLORS } from "./warehouse3dWorker";
 import {
+  createWarehouseOperatorScanner,
   createWarehouseWorkerPose,
   createWarehouseWorkerScanCue,
   createWarehouseWorkerVisual,
@@ -16,6 +17,9 @@ import {
   SERVICE_FORWARD_REACH_LIMIT,
   getWarehouseWorkerFacingYaw,
   getWarehouseWorkerFigureScale,
+  getWarehouseOperatorPartColor,
+  WAREHOUSE_OPERATOR_HAND_ANCHOR,
+  WAREHOUSE_OPERATOR_PPE,
   WAREHOUSE_WORKER_DEPTH_POLICY,
   WAREHOUSE_WORKER_SCALE,
 } from "./warehouse3dWorker";
@@ -432,5 +436,90 @@ describe("warehouse worker proportions", () => {
     expect(WAREHOUSE_WORKER_SCALE.maximum).toBeLessThan(1.3);
     expect(WAREHOUSE_WORKER_SCALE.minimum).toBeLessThan(0.85);
     expect(getWarehouseWorkerFigureScale(1)).toBe(WAREHOUSE_WORKER_SCALE.minimum);
+  });
+});
+
+describe("imported operator PPE", () => {
+  test("dresses the imported model as a warehouse operator by material name", () => {
+    expect(WAREHOUSE_OPERATOR_PPE.Shirt).toBe(WAREHOUSE_WORKER_COLORS.hiVis);
+    expect(WAREHOUSE_OPERATOR_PPE.Workwear).toBe(WAREHOUSE_WORKER_COLORS.workwear);
+    expect(WAREHOUSE_OPERATOR_PPE.Pants).toBe(WAREHOUSE_WORKER_COLORS.workwear);
+
+    const luminance = (hex: string) => [1, 3, 5]
+      .map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16))
+      .reduce((total, channel) => total + channel, 0) / 3;
+    // Hi-vis has to be the brightest thing on the operator, by a wide margin.
+    expect(luminance(WAREHOUSE_OPERATOR_PPE.Shirt))
+      .toBeGreaterThan(luminance(WAREHOUSE_OPERATOR_PPE.Workwear) + 80);
+  });
+
+  test("leaves anything PPE does not dress in the model's own colour", () => {
+    expect(getWarehouseOperatorPartColor("Skin", "#c2a184")).toBe("#c2a184");
+    expect(getWarehouseOperatorPartColor("Hair", "#101010")).toBe("#101010");
+    expect(getWarehouseOperatorPartColor("Shirt", "#c2a184"))
+      .toBe(WAREHOUSE_WORKER_COLORS.hiVis);
+  });
+
+  test("never carries route identity on the body", () => {
+    // Compare fairness: both operators are the same person in the same PPE, so
+    // identity has to live on the locator ring, not on the human.
+    const identityColors = ["#2f6fc4", "#1f9d76"];
+    for (const color of identityColors) {
+      expect(Object.values(WAREHOUSE_OPERATOR_PPE)).not.toContain(color);
+    }
+    for (const partName of ["Shirt", "Workwear", "Pants", "Skin"]) {
+      expect(getWarehouseOperatorPartColor(partName, identityColors[0]))
+        .toBe(partName === "Skin" ? identityColors[0] : WAREHOUSE_OPERATOR_PPE[partName]);
+    }
+  });
+});
+
+describe("imported operator scanner", () => {
+  test("rests in the operator's hand while travelling", () => {
+    const scanner = createWarehouseOperatorScanner(null);
+
+    expect(scanner.position).toEqual([...WAREHOUSE_OPERATOR_HAND_ANCHOR]);
+    expect(scanner.yawRadians).toBe(0);
+    // The scan head sits just above the grip, still at the hand.
+    expect(scanner.head[1]).toBeGreaterThan(scanner.position[1]);
+    expect(WAREHOUSE_OPERATOR_HAND_ANCHOR.every(Number.isFinite)).toBe(true);
+  });
+
+  test("lifts to a working height while counting, from service time alone", () => {
+    const resting = createWarehouseOperatorScanner(null);
+    const counting = createWarehouseOperatorScanner(createWarehouseCountingGesture(1.4));
+
+    expect(counting.position[1]).toBeGreaterThan(resting.position[1]);
+    // Same elapsed time, same scanner: no clock, no accumulator.
+    expect(createWarehouseOperatorScanner(createWarehouseCountingGesture(1.4))).toEqual(counting);
+  });
+
+  test("never pushes the scanner past the rack-face reach limit", () => {
+    for (const elapsed of [0, 0.3, 0.7, 1.1, 1.9, 2.6, 3.4, 4.8, 7.2]) {
+      const scanner = createWarehouseOperatorScanner(createWarehouseCountingGesture(elapsed));
+      for (const point of [scanner.position, scanner.head]) {
+        expect({ elapsed, withinReach: point[2] <= SERVICE_FORWARD_REACH_LIMIT })
+          .toEqual({ elapsed, withinReach: true });
+        expect(point.every(Number.isFinite)).toBe(true);
+      }
+    }
+  });
+
+  test("lets the imported operator scan from its own hand", () => {
+    const gesture = createWarehouseCountingGesture(1.1);
+    const scanner = createWarehouseOperatorScanner(gesture);
+
+    const procedural = createWarehouseWorkerScanCue(gesture);
+    const imported = createWarehouseWorkerScanCue(gesture, scanner.head);
+
+    expect(imported?.origin).toEqual(scanner.head);
+    expect(procedural?.origin).not.toEqual(scanner.head);
+    // Only the emitting point moves; the read itself is the same event.
+    expect(imported?.waves).toEqual(procedural?.waves);
+    expect(imported?.direction).toEqual(procedural?.direction);
+  });
+
+  test("emits no scan cue at all outside service", () => {
+    expect(createWarehouseWorkerScanCue(null, [0, 1, 0])).toBeNull();
   });
 });

@@ -83,6 +83,74 @@ export const WAREHOUSE_WORKER_COLORS = {
  */
 export const SERVICE_FORWARD_REACH_LIMIT = 0.24;
 
+/**
+ * Renderer-side PPE, keyed by the imported model's own material names. The
+ * asset ships in its author's street colours; dressing it as a warehouse
+ * operator is a material decision, not a change to the file.
+ *
+ * Route identity deliberately appears nowhere here: both operators are the same
+ * person in the same PPE, and identity lives on the locator ring alone.
+ */
+export const WAREHOUSE_OPERATOR_PPE: Readonly<Record<string, string>> = {
+  Shirt: WAREHOUSE_WORKER_COLORS.hiVis,
+  Workwear: WAREHOUSE_WORKER_COLORS.workwear,
+  Pants: WAREHOUSE_WORKER_COLORS.workwear,
+  Socks: WAREHOUSE_WORKER_COLORS.equipment,
+};
+
+/** Falls back to the model's own colour for anything PPE does not dress. */
+export function getWarehouseOperatorPartColor(partName: string, sourceColor: string): string {
+  return WAREHOUSE_OPERATOR_PPE[partName] ?? sourceColor;
+}
+
+/**
+ * Where the imported operator's working hand sits, in the same figure-local
+ * frame the procedural figure uses (a 1.76-unit-tall operator standing at the
+ * origin). Measured once from the baked mesh; the scanner hangs here.
+ */
+export const WAREHOUSE_OPERATOR_HAND_ANCHOR = [0.211, 0.781, 0.039] as const;
+
+export interface WarehouseOperatorScanner {
+  /** Figure-local position of the scanner body. */
+  readonly position: readonly [number, number, number];
+  readonly yawRadians: number;
+  /** Figure-local position of the scan head, where the read originates. */
+  readonly head: readonly [number, number, number];
+}
+
+/** How far the scanner rises from the hip toward chest height while counting. */
+export const SCANNER_SERVICE_LIFT = 0.34;
+
+/**
+ * Places the handheld scanner on the imported operator. The model is static, so
+ * the scanner does the acting: it rests at the hand while travelling and rises
+ * to a readable working height, angled at the bay, while counting.
+ *
+ * Every value comes from the counting gesture, which is itself a pure function
+ * of service elapsed time. No clock, no accumulator.
+ */
+export function createWarehouseOperatorScanner(
+  gesture: WarehouseCountingGesture | null,
+): WarehouseOperatorScanner {
+  const [handX, handY, handZ] = WAREHOUSE_OPERATOR_HAND_ANCHOR;
+  if (!gesture) {
+    return { position: [handX, handY, handZ], yawRadians: 0, head: [handX, handY + 0.06, handZ] };
+  }
+
+  const lift = SCANNER_SERVICE_LIFT * gesture.armLift;
+  const reach = 0.09 + 0.1 * gesture.scanReach;
+  const position = clampForwardReach(rotateAboutY(
+    [handX * 0.6, handY + lift, handZ + reach],
+    gesture.torsoTwist,
+  ));
+  const head = clampForwardReach(rotateAboutY(
+    [handX * 0.6, handY + lift + 0.05, handZ + reach + 0.05],
+    gesture.torsoTwist,
+  ));
+
+  return { position, yawRadians: gesture.torsoTwist, head };
+}
+
 const DEFAULT_FACING_YAW = 0;
 const DIRECTION_EPSILON = 1e-9;
 
@@ -550,12 +618,14 @@ export const SCAN_WAVE_MAX_RADIUS = 0.17;
  */
 export function createWarehouseWorkerScanCue(
   gesture: WarehouseCountingGesture | null,
+  /** Overrides the emitting point, so an imported operator scans from its own hand. */
+  originOverride?: readonly [number, number, number],
 ): WarehouseWorkerScanCue | null {
   if (!gesture) return null;
 
   const scanning = serviceArm(gesture.scanReach);
   const direction = rotateAboutY([0, 0, 1], gesture.torsoTwist);
-  const head = clampForwardReach(rotateAboutY(
+  const head = originOverride ?? clampForwardReach(rotateAboutY(
     [HAND_X, scanning.hand[0] + 0.07, scanning.hand[1] + 0.035],
     gesture.torsoTwist,
   ));

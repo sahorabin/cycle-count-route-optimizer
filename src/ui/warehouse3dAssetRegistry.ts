@@ -47,18 +47,10 @@ export interface WarehouseAssetEntry {
   readonly note: string;
 }
 
-const PROCEDURAL: WarehouseAssetProvenance = {
-  source: null,
-  license: "none",
-  redistributable: false,
-  attribution: null,
-  commercialUse: false,
-};
-
 /**
- * No external model or texture is currently shipped. Each entry documents the
- * envelope an imported asset must normalize into, so adding one later is a
- * data change here plus a file, not a renderer rewrite.
+ * Every visual category now ships a licence-cleared file, and each entry
+ * documents the envelope it normalizes into. An entry with `file: null` renders
+ * procedural geometry, which is also what a failed load falls back to.
  */
 export const WAREHOUSE_ASSET_REGISTRY: readonly WarehouseAssetEntry[] = [
   {
@@ -111,10 +103,17 @@ export const WAREHOUSE_ASSET_REGISTRY: readonly WarehouseAssetEntry[] = [
   {
     id: "operator",
     category: "worker",
-    file: null,
-    provenance: PROCEDURAL,
+    file: "/assets/worker/quaternius_man_01/quaternius_man_01.gltf",
+    provenance: {
+      source: "https://poly.pizza/m/HMnuH5geEG",
+      license: "CC0",
+      redistributable: true,
+      attribution: "Man by Quaternius (poly.pizza), CC0",
+      commercialUse: true,
+    },
     envelopeSpan: 1.76,
-    note: "Procedural operator with hi-vis vest, hard hat, and handheld scanner.",
+    note: "Real CC0 human, posed and baked to a static mesh here; PPE colours "
+      + "are applied by the renderer. The procedural figure remains the fallback.",
   },
 ];
 

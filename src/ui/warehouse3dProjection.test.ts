@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 import { largeWarehouse } from "../data/largeWarehouse";
-import { buildWarehouse3DEnvironment } from "./warehouse3dEnvironment";
+import {
+  buildWarehouse3DEnvironment,
+  WAREHOUSE_3D_ENVIRONMENT,
+} from "./warehouse3dEnvironment";
+import { getWarehouseAssetEntry } from "./warehouse3dAssetRegistry";
 import { createWarehouseCountingGesture } from "./warehouse3dServiceVisual";
 import {
   createWarehouseWorkerVisual,
@@ -318,6 +322,55 @@ describe("service pose clearance", () => {
       return Math.abs(faceX - stand.x);
     }));
   }
+
+  /** Combined bounds of the shipped operator, read from the asset itself. */
+  function operatorAssetSize(): readonly [number, number, number] {
+    const files = import.meta.glob("/public/assets/worker/**/*.gltf", {
+      eager: true,
+      query: "?raw",
+      import: "default",
+    }) as Record<string, string>;
+    const gltf = JSON.parse(Object.values(files)[0]);
+    const bounds = gltf.meshes[0].primitives.map(
+      (primitive: { attributes: { POSITION: number } }) =>
+        gltf.accessors[primitive.attributes.POSITION]);
+    return [0, 1, 2].map((axis) =>
+      Math.max(...bounds.map((a: { max: number[] }) => a.max[axis]))
+      - Math.min(...bounds.map((a: { min: number[] }) => a.min[axis]))) as
+        unknown as readonly [number, number, number];
+  }
+
+  test("stands the imported operator clear of the rack it is counting", () => {
+    const size = operatorAssetSize();
+    const entry = getWarehouseAssetEntry("operator");
+    // Uniform: the model is fitted by its longest axis, which is its height.
+    const scale = (entry?.envelopeSpan ?? 1.76) / Math.max(...size);
+    const halfDepth = (size[2] * scale) / 2;
+    const halfWidth = (size[0] * scale) / 2;
+
+    expect(Math.max(...size)).toBe(size[1]);
+    // The body's forward half-depth has to fit inside the aisle clearance, or
+    // the operator would be standing in the racking.
+    expect(halfDepth).toBeLessThan(aisleClearance());
+    // Facing the rack puts the arm span along the aisle, never into shelving.
+    expect(halfWidth).toBeLessThan(aisleClearance() * 2);
+    expect([halfDepth, halfWidth].every(Number.isFinite)).toBe(true);
+  });
+
+  test("scales the imported operator uniformly to a credible human height", () => {
+    const size = operatorAssetSize();
+    const entry = getWarehouseAssetEntry("operator");
+    const scale = (entry?.envelopeSpan ?? 1.76) / Math.max(...size);
+    const rendered = size.map((value) => value * scale);
+
+    expect(rendered[1]).toBeCloseTo(entry?.envelopeSpan ?? 1.76, 6);
+    // Proportions survive: one factor on every axis, never a per-axis stretch.
+    expect(rendered[0] / rendered[1]).toBeCloseTo(size[0] / size[1], 9);
+    expect(rendered[2] / rendered[1]).toBeCloseTo(size[2] / size[1], 9);
+    // Human against 2.3-unit racking: clearly shorter, clearly not a doll.
+    expect(rendered[1]).toBeGreaterThan(WAREHOUSE_3D_ENVIRONMENT.rackHeight * 0.6);
+    expect(rendered[1]).toBeLessThan(WAREHOUSE_3D_ENVIRONMENT.rackHeight);
+  });
 
   test("keeps the whole service pose short of the rack face", () => {
     const clearance = aisleClearance();

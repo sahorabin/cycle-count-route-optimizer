@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Vector3 } from "three";
+import { Box3, Vector3 } from "three";
 import type { BufferGeometry, Group, Material, Mesh, MeshStandardMaterial } from "three";
 import { WAREHOUSE_3D_MATERIALS } from "./warehouse3dVisuals";
 import {
@@ -27,6 +27,20 @@ export interface WarehouseAssetHandle {
    * uniform factor rather than stretching it per axis.
    */
   readonly naturalSize: readonly [number, number, number] | null;
+  /**
+   * Every drawable piece of a multi-material model, grounded on y = 0 and
+   * centred in X/Z at its own natural scale. A caller places the whole figure
+   * with one uniform group scale and dresses each piece by material name.
+   */
+  readonly parts: readonly WarehouseAssetPart[] | null;
+}
+
+export interface WarehouseAssetPart {
+  /** Source material name, e.g. "Shirt" -- the handle for renderer-side dressing. */
+  readonly name: string;
+  readonly geometry: BufferGeometry;
+  /** The model's own base colour, as a CSS hex string. */
+  readonly color: string;
 }
 
 const FALLBACK: WarehouseAssetHandle = {
@@ -36,6 +50,7 @@ const FALLBACK: WarehouseAssetHandle = {
   geometry: null,
   material: null,
   naturalSize: null,
+  parts: null,
 };
 
 const FAILED: WarehouseAssetHandle = { ...FALLBACK, status: "error" };
@@ -67,6 +82,48 @@ export function normalizeAssetGeometryToUnitBox(
   geometry.translate(-center.x, -center.y, -center.z);
   geometry.scale(1 / size.x, 1 / size.y, 1 / size.z);
   return { geometry, size };
+}
+
+/**
+ * Grounds a whole model on the floor plane and centres it in X/Z, keeping its
+ * natural scale so the caller applies exactly one uniform factor. Every piece
+ * shares one bounding box, so parts can never drift apart.
+ */
+function buildGroundedParts(meshes: readonly Mesh[]): {
+  readonly parts: WarehouseAssetPart[];
+  readonly size: Vector3;
+} | null {
+  const pieces = meshes.map((mesh) => {
+    const geometry = mesh.geometry.clone();
+    geometry.applyMatrix4(mesh.matrixWorld);
+    geometry.computeBoundingBox();
+    return { mesh, geometry };
+  });
+
+  const box = new Box3();
+  for (const piece of pieces) {
+    if (piece.geometry.boundingBox) box.union(piece.geometry.boundingBox);
+  }
+
+  const size = box.getSize(new Vector3());
+  const center = box.getCenter(new Vector3());
+  if (![size.x, size.y, size.z].every((value) => Number.isFinite(value) && value > 0)) return null;
+
+  for (const piece of pieces) {
+    piece.geometry.translate(-center.x, -box.min.y, -center.z);
+  }
+
+  return {
+    size,
+    parts: pieces.map(({ mesh, geometry }, index) => {
+      const material = clampAssetMaterial(mesh.material) as MeshStandardMaterial;
+      return {
+        name: material.name || `part-${index}`,
+        geometry,
+        color: `#${material.color?.getHexString?.() ?? "ffffff"}`,
+      };
+    }),
+  };
 }
 
 /**
@@ -127,14 +184,16 @@ export function loadWarehouseAsset(id: string): Promise<WarehouseAssetHandle> {
       const baked = source.geometry.clone();
       baked.applyMatrix4(source.matrixWorld);
       const normalized = normalizeAssetGeometryToUnitBox(baked, entry.yawRadians);
-      if (!normalized) return FAILED;
+      const grounded = buildGroundedParts(meshes);
+      if (!normalized || !grounded) return FAILED;
 
-      const { size } = normalized;
+      const size = grounded.size;
       return {
         status: "ready",
         scene: gltf.scene,
         geometry: normalized.geometry,
         material: clampAssetMaterial(source.material),
+        parts: grounded.parts,
         naturalSize: [size.x, size.y, size.z],
         normalization: normalizeAssetToEnvelope(
           { width: size.x, height: size.y, depth: size.z },

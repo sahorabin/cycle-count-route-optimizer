@@ -1,0 +1,38 @@
+Warehouse Operator (from "Man")
+===============================
+
+Source:        https://poly.pizza/m/HMnuH5geEG
+Author:        Quaternius (https://quaternius.com)
+License:       CC0 1.0 Universal (Public Domain Dedication)
+License text:  https://creativecommons.org/publicdomain/zero/1.0/
+Redistribution: Permitted. CC0 places the work in the public domain; no
+                permission or attribution is required. Attribution is given
+                here as a courtesy to the author.
+Commercial use: Permitted.
+
+Modifications made for this project (permitted under CC0, listed for honesty):
+  - The source is a rigged GLB with 11 animation clips. One frame of its "Idle"
+    clip (t = 0.4s) was baked into a static mesh: skinning was applied per
+    vertex, normals were recomputed for the posed geometry, and the skeleton,
+    skin, and all animation data were dropped. The app therefore loads a posed
+    mesh with no rig and runs no animation mixer.
+  - The leg triangles of the "Skin" primitive (centroid below y = 1.62 in model
+    units) were partitioned into a separate "Workwear" primitive so the renderer
+    can dress them as work trousers. Geometry was partitioned, never deformed:
+    the vertex positions are unchanged and the triangle count is identical.
+  - Material colours in the file are the author's originals. PPE colouring
+    (hi-vis top, dark workwear, dark boots) is applied at render time by
+    material name and is not baked into this file.
+
+Files in this directory:
+  quaternius_man_01.gltf                  8,173 bytes
+  quaternius_man_01.bin                 150,960 bytes
+  Total                                   ~156 KB
+
+Geometry: 1 mesh, 7 primitives, 7 materials, 1,852 triangles, no textures,
+no skin, no animations.
+Retrieved: 2026-08-19 from poly.pizza.
+
+Used in this project as the warehouse operator. It is presentation only:
+warehouse layout, routing, timing, simulation state, and KPI truth never read
+asset geometry. The operator's position and facing come from SimulationSnapshot.
