@@ -30,7 +30,9 @@ export type WarehouseEnvironmentBoxKind =
   | "boundary-marking"
   | "wall"
   | "column"
-  | "overhead-fixture";
+  | "overhead-fixture"
+  | "safety-bollard"
+  | "safety-barrier";
 
 export interface WarehouseEnvironmentBoxVisual {
   readonly id: string;
@@ -94,6 +96,20 @@ export interface Warehouse3DEnvironment {
   readonly props: readonly WarehousePropVisual[];
   readonly aisles: readonly WarehouseAisleVisual[];
   readonly boundary: WarehouseBoundaryVisual;
+  readonly industrialContext: WarehouseIndustrialContext;
+}
+
+export interface WarehouseForkliftVisual {
+  readonly id: "warehouse-forklift";
+  readonly center: readonly [number, number, number];
+  readonly size: readonly [number, number, number];
+  readonly yawRadians: number;
+}
+
+export interface WarehouseIndustrialContext {
+  readonly forklift: WarehouseForkliftVisual;
+  readonly bollards: readonly WarehouseEnvironmentBoxVisual[];
+  readonly barriers: readonly WarehouseEnvironmentBoxVisual[];
 }
 
 export interface WarehouseEnvironmentRenderSet {
@@ -471,7 +487,8 @@ function buildFloorProps(transform: Warehouse3DTransform): WarehousePropVisual[]
   const minZ = (transform.minY - transform.centerY) * transform.visualScale - padding;
   const props: WarehousePropVisual[] = [];
 
-  [0.12, 0.28, 0.46, 0.72, 0.88].forEach((ratio, index) => {
+  // One sparse operational staging group: two loaded pallets and one empty.
+  [0.46, 0.5, 0.54].forEach((ratio, index) => {
     const x = minX + (maxX - minX) * ratio;
     const z = minZ + 0.4;
     const seed = stableHash(`floor-prop:${index}`);
@@ -481,6 +498,7 @@ function buildFloorProps(transform: Warehouse3DTransform): WarehousePropVisual[]
       minimumDetail: "overview",
       rackId: "staging",
     });
+    if (index === 1) return;
     const stack = 0.16 + (seed % 3) * 0.07;
     props.push({
       ...box(`floor-carton-${index}`, "carton", [x, 0.06 + stack / 2, z], [0.34, stack, 0.34]),
@@ -492,6 +510,40 @@ function buildFloorProps(transform: Warehouse3DTransform): WarehousePropVisual[]
   });
 
   return props;
+}
+
+/** Static operational cues confined to the perimeter apron. */
+function buildIndustrialContext(
+  boundary: WarehouseBoundaryVisual,
+): WarehouseIndustrialContext {
+  const [floorX, , floorZ] = boundary.floor.center;
+  const [floorWidth, , floorDepth] = boundary.floor.size;
+  const minZ = floorZ - floorDepth / 2;
+  const maxX = floorX + floorWidth / 2;
+  const forklift: WarehouseForkliftVisual = {
+    id: "warehouse-forklift",
+    center: [maxX - 1.35, 0, minZ + 0.52],
+    size: [2.1, 1.68, 1],
+    yawRadians: Math.PI / 2,
+  };
+
+  const bollards = [
+    [maxX - 2.55, minZ + 0.18],
+    [maxX - 2.55, minZ + 0.78],
+    [floorX - 1.65, minZ + 0.18],
+    [floorX + 1.65, minZ + 0.18],
+  ].map(([x, z], index) => box(
+    `safety-bollard-${index}`,
+    "safety-bollard",
+    [x, 0.28, z],
+    [0.09, 0.56, 0.09],
+  ));
+  const barriers = [
+    box("staging-barrier-rail", "safety-barrier", [floorX, 0.42, minZ + 0.16], [2.9, 0.07, 0.07]),
+    box("staging-barrier-post-left", "safety-barrier", [floorX - 1.42, 0.24, minZ + 0.16], [0.07, 0.48, 0.07]),
+    box("staging-barrier-post-right", "safety-barrier", [floorX + 1.42, 0.24, minZ + 0.16], [0.07, 0.48, 0.07]),
+  ];
+  return { forklift, bollards, barriers };
 }
 
 /**
@@ -527,11 +579,13 @@ export function buildWarehouse3DEnvironment(
 
   props.push(...buildFloorProps(transform));
 
+  const boundary = { ...buildBoundary(transform), signage: buildSignage(racks) };
   return {
     racks,
     props,
     aisles: aisleRects.map((rect, index) => buildAisleVisual(`lane-${index}`, rect, transform)),
-    boundary: { ...buildBoundary(transform), signage: buildSignage(racks) },
+    boundary,
+    industrialContext: buildIndustrialContext(boundary),
   };
 }
 

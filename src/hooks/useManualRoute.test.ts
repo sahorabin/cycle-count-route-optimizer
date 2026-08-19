@@ -28,6 +28,12 @@ describe("useManualRoute", () => {
     expect(result.current.stopIds).toEqual(["a", "c"]);
   });
 
+  test("removeStops removes completed destinations while preserving every remaining position", () => {
+    const { result } = renderHook(() => useManualRoute(["a", "b", "c", "d"]));
+    act(() => result.current.removeStops(new Set(["b"])));
+    expect(result.current.stopIds).toEqual(["a", "c", "d"]);
+  });
+
   test("moveUp/moveDown swap adjacent stops and are no-ops at the boundaries", () => {
     const { result } = renderHook(() => useManualRoute());
     act(() => {
@@ -41,6 +47,12 @@ describe("useManualRoute", () => {
     expect(result.current.stopIds).toEqual(["b", "a", "c"]);
     act(() => result.current.moveDown(2)); // already last, no-op
     expect(result.current.stopIds).toEqual(["b", "a", "c"]);
+  });
+
+  test("moveStop supports direct drag reorder without changing membership", () => {
+    const { result } = renderHook(() => useManualRoute(["a", "b", "c"]));
+    act(() => result.current.moveStop(0, 2));
+    expect(result.current.stopIds).toEqual(["b", "c", "a"]);
   });
 
   test("clear empties the route", () => {

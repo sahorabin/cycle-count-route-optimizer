@@ -8,6 +8,7 @@ interface ProgressPanelProps {
   onTargetCountChange: (count: number) => void;
   onMarkSelectedComplete: () => void;
   onUndoSelectedCompletion: () => void;
+  undoAvailable?: boolean;
 }
 
 export function ProgressPanel({
@@ -17,6 +18,7 @@ export function ProgressPanel({
   onTargetCountChange,
   onMarkSelectedComplete,
   onUndoSelectedCompletion,
+  undoAvailable = false,
 }: ProgressPanelProps) {
   const { t } = useTranslation();
   const completed = completedIds.size;
@@ -73,14 +75,18 @@ export function ProgressPanel({
         </div>
       </dl>
 
-      {selectedIds.size > 0 && (
+      {(selectedIds.size > 0 || undoAvailable) && (
         <div className="progress-panel__actions">
-          <button type="button" onClick={onMarkSelectedComplete}>
-            {t("progress.markComplete")}
-          </button>
-          <button type="button" onClick={onUndoSelectedCompletion}>
-            {t("progress.undoComplete")}
-          </button>
+          {selectedIds.size > 0 && (
+            <button type="button" onClick={onMarkSelectedComplete}>
+              {t("progress.markComplete")}
+            </button>
+          )}
+          {undoAvailable && (
+            <button type="button" onClick={onUndoSelectedCompletion}>
+              {t("progress.undoComplete")}
+            </button>
+          )}
         </div>
       )}
     </section>

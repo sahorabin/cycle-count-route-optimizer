@@ -59,6 +59,7 @@ describe("ProgressPanel", () => {
   test("mark-complete and undo buttons call their handlers", () => {
     const { onMarkSelectedComplete, onUndoSelectedCompletion } = setup({
       selectedIds: new Set(["a"]),
+      undoAvailable: true,
     });
     fireEvent.click(screen.getByRole("button", { name: "Mark selected complete" }));
     expect(onMarkSelectedComplete).toHaveBeenCalled();

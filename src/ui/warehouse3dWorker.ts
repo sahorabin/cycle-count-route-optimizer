@@ -56,14 +56,9 @@ export interface WarehouseWorkerPose {
 }
 
 /**
- * Muted workwear rather than saturated primaries. The route identity colour is
- * carried only by the hi-vis vest and hard hat -- the way a real operator is
- * identifiable -- so the figure reads as PPE instead of a painted game token.
- */
-/**
  * Real PPE reading, not route paint: a fluorescent hi-vis vest over dark work
- * clothing. Route identity is carried by the hard hat alone, so both operators
- * look like the same warehouse worker.
+ * clothing, plus one consistent warehouse-blue hard hat. Route identity stays
+ * on analytical overlays rather than painting the operator.
  */
 export const WAREHOUSE_WORKER_COLORS = {
   skin: "#c2a184",
@@ -72,7 +67,9 @@ export const WAREHOUSE_WORKER_COLORS = {
    * legs do not dissolve into the floor and rack shadow while walking. */
   workwear: "#414c5c",
   hiVis: "#d8e63c",
-  safety: "#c8a13a",
+  safety: "#f2c94c",
+  hardHat: "#2563a8",
+  reflective: "#e7eef2",
   equipment: "#20252c",
   scannerHead: "#3d4854",
 } as const;
@@ -124,7 +121,11 @@ export const WAREHOUSE_OPERATOR_CLIPS = { idle: "Man_Idle" } as const;
 export const WAREHOUSE_OPERATOR_TROUSER_LINE = 0.336;
 
 /** Bones the renderer anchors accessories to, by their name in the shipped rig. */
-export const WAREHOUSE_OPERATOR_BONES = { hand: "MiddleHandR", head: "Head" } as const;
+export const WAREHOUSE_OPERATOR_BONES = {
+  hand: "MiddleHandR",
+  head: "Head",
+  torso: "Torso",
+} as const;
 
 /** Sanitized glTF node names used by three.js for the reference gait deltas. */
 export const WAREHOUSE_REFERENCE_GAIT_BONES = {
@@ -145,15 +146,15 @@ export const WAREHOUSE_REFERENCE_GAIT_BONES = {
  * the head bone. Deliberately small: PPE, not a costume.
  */
 export const WAREHOUSE_OPERATOR_HAT = {
-  shellRadius: 0.125,
-  brimDepth: 0.085,
-  brimReach: 0.075,
+  shellRadius: 0.14,
+  brimDepth: 0.095,
+  brimReach: 0.082,
   /**
    * The head bone sits at the base of the skull, a measured 0.218 below the
    * crown, so the shell has to be lifted clear of the hair before it reads as a
    * hat rather than a scalp.
    */
-  lift: 0.1,
+  lift: 0.11,
 } as const;
 
 /**
@@ -650,8 +651,9 @@ function applyCountingGesture(
 }
 
 /**
- * Same lightweight operator structure for both route identities; only identity
- * color varies. Supplying a `gesture` re-poses the existing primitives into
+ * Same lightweight operator structure for both route identities. The legacy
+ * identity-color argument remains API-compatible, while PPE now uses one
+ * consistent blue hard hat. Supplying a `gesture` re-poses the primitives into
  * counting work -- it never adds, removes, or renames a part, and it never
  * moves the worker root.
  */
@@ -660,6 +662,7 @@ export function createWarehouseWorkerVisual(
   gesture: WarehouseCountingGesture | null = null,
   figureScale: number = WAREHOUSE_WORKER_SCALE.maximum,
 ): WarehouseWorkerVisual {
+  void identityColor;
   const worker = WAREHOUSE_3D_VISUALS.worker;
   const parts: WarehouseWorkerVisualPart[] = [
     {
@@ -770,14 +773,14 @@ export function createWarehouseWorkerVisual(
       scale: [0.86, 1, 0.86],
     },
     {
-      ...basePart("hard-hat", "identity", identityColor, [0, 1.715, 0]),
+      ...basePart("hard-hat", "identity", WAREHOUSE_WORKER_COLORS.hardHat, [0, 1.715, 0]),
       primitive: "cylinder",
       topRadius: 0.115,
       bottomRadius: 0.142,
       height: 0.075,
     },
     {
-      ...basePart("hard-hat-brim", "identity", identityColor, [0, 1.678, 0.03]),
+      ...basePart("hard-hat-brim", "identity", WAREHOUSE_WORKER_COLORS.hardHat, [0, 1.678, 0.03]),
       primitive: "box",
       size: [0.3, 0.022, 0.2],
     },

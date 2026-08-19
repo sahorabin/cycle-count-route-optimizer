@@ -5,6 +5,8 @@ import { useTranslation } from "../i18n/useTranslation";
 interface TargetSelectorProps {
   locations: CycleCountLocation[];
   selected: ReadonlySet<NodeId>;
+  orderedIds: NodeId[];
+  completedIds: ReadonlySet<NodeId>;
   search: string;
   zone: string;
   onSearchChange: (value: string) => void;
@@ -18,6 +20,8 @@ interface TargetSelectorProps {
 export function TargetSelector({
   locations,
   selected,
+  orderedIds,
+  completedIds,
   search,
   zone,
   onSearchChange,
@@ -48,10 +52,13 @@ export function TargetSelector({
     });
   }, [locations, search, zone, selectedOnly, selected]);
 
-  const selectedLocations = useMemo(
-    () => locations.filter((l) => selected.has(l.id)),
-    [locations, selected],
-  );
+  const selectedLocations = useMemo(() => {
+    const byId = new Map(locations.map((location) => [location.id, location]));
+    return orderedIds.flatMap((id) => {
+      const location = byId.get(id);
+      return location ? [location] : [];
+    });
+  }, [locations, orderedIds]);
   // Beyond this many chips, the tray switches to an explicit "N more"
   // expand/collapse control instead of relying on a scrollbar the worker
   // might not notice -- and even expanded, it stays height-bounded so it
@@ -91,7 +98,7 @@ export function TargetSelector({
       </div>
 
       <div className="target-selector__actions">
-        <button type="button" onClick={() => onSelectVisible(visible.map((l) => l.id))}>
+        <button type="button" onClick={() => onSelectVisible(visible.filter((l) => !completedIds.has(l.id)).map((l) => l.id))}>
           {t("selector.selectVisible")}
         </button>
         <button type="button" onClick={onClearAll}>
@@ -109,18 +116,25 @@ export function TargetSelector({
       </div>
 
       <ul className="target-selector__list" role="list">
-        {visible.map((location) => (
-          <li key={location.id}>
+        {visible.map((location) => {
+          const completed = completedIds.has(location.id);
+          return (
+          <li key={location.id} className={completed ? "target-selector__row--completed" : undefined}>
             <label>
               <input
                 type="checkbox"
                 checked={selected.has(location.id)}
-                onChange={() => onToggle(location.id)}
+                disabled={completed}
+                onChange={() => {
+                  if (!completed) onToggle(location.id);
+                }}
               />
               <span className="target-selector__label">{location.label}</span>
+              {completed && <span className="target-selector__completed">✓ {t("selector.completed")}</span>}
             </label>
           </li>
-        ))}
+          );
+        })}
       </ul>
 
       <p className="target-selector__count" aria-live="polite">
@@ -140,6 +154,9 @@ export function TargetSelector({
             >
               {visibleChips.map((location) => (
                 <li key={location.id} className="target-selector__chip">
+                  <span className="target-selector__chip-sequence">
+                    {orderedIds.indexOf(location.id) + 1}
+                  </span>
                   {location.label}
                   <button
                     type="button"

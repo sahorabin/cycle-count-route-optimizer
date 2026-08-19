@@ -22,12 +22,12 @@ export const WAREHOUSE_3D_VISUALS = {
   },
   route: {
     /** Planned-but-not-yet-walked legs stay faint; the walked path resolves. */
-    radius: 0.032,
-    traversedRadius: 0.04,
+    radius: 0.026,
+    traversedRadius: 0.035,
     /** Slightly heavier line for the leg the operator is walking right now. */
-    activeRadius: 0.058,
-    opacity: 0.5,
-    traversedOpacity: 0.82,
+    activeRadius: 0.052,
+    opacity: 0.38,
+    traversedOpacity: 0.76,
     activeOpacity: 1,
     y: 0.11,
     radialSegments: 6,
@@ -72,12 +72,12 @@ export const WAREHOUSE_3D_VISUALS = {
  */
 export const WAREHOUSE_3D_MATERIALS = {
   /** The building envelope stays dark; the workspace inside it does not. */
-  background: "#1a212b",
+  background: "#2a333d",
   /** Bright industrial concrete: the primary plane the whole scene reads against. */
-  floor: { color: "#c6c9c4", roughness: 0.95 },
-  localAisle: { color: "#d2d5cf", roughness: 0.95 },
-  internalCrossAisle: { color: "#c9ccc6", roughness: 0.95 },
-  blockSeparation: { color: "#bfc2bc", roughness: 0.95 },
+  floor: { color: "#c9c8c2", roughness: 0.97 },
+  localAisle: { color: "#d3d2cc", roughness: 0.97 },
+  internalCrossAisle: { color: "#cac9c3", roughness: 0.97 },
+  blockSeparation: { color: "#c0c1bc", roughness: 0.97 },
   aisleMarking: { color: "#c9a12f", roughness: 0.85 },
   perimeterMarking: { color: "#ad8a2c", roughness: 0.85 },
   wall: { color: "#48525e", roughness: 0.96, opacity: 0.45 },
@@ -96,6 +96,11 @@ export const WAREHOUSE_3D_MATERIALS = {
   aisleSign: { color: "#9aa5b1", roughness: 0.78 },
   pallet: { color: "#8a7048", roughness: 1 },
   carton: { color: "#b0946a", roughness: 0.94 },
+  forkliftPaint: { color: "#9a7f45", roughness: 0.78, metalness: 0.08 },
+  forkliftDark: { color: "#303941", roughness: 0.72, metalness: 0.16 },
+  forkliftTyre: { color: "#20252a", roughness: 0.98 },
+  forkliftSeat: { color: "#39424a", roughness: 0.9 },
+  safety: { color: "#a98a3f", roughness: 0.82, metalness: 0.08 },
   unselectedLocation: { color: "#7b8794", roughness: 0.85 },
   office: { color: "#c08d38", roughness: 0.7 },
   progressTrack: "#8d97a2",
@@ -103,14 +108,14 @@ export const WAREHOUSE_3D_MATERIALS = {
   /** Restrained operational accent, used only for the count actually running. */
   activeAccent: "#17a8a0",
   lighting: {
-    sky: "#e6edf1",
-    ground: "#6e7681",
-    hemisphereIntensity: 1.15,
+    sky: "#f0eee8",
+    ground: "#87919b",
+    hemisphereIntensity: 1.32,
     keyPosition: [9, 13, 8],
-    keyIntensity: 0.95,
+    keyIntensity: 1.02,
     /** A weak opposite fill keeps unlit faces from going flat without shadows. */
     fillPosition: [-8, 7, -6],
-    fillIntensity: 0.4,
+    fillIntensity: 0.52,
   },
   /**
    * Repeated rack geometry cast a dense shadow grid across the aisles and made

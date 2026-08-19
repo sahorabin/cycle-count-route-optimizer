@@ -494,15 +494,18 @@ describe("warehouse worker proportions", () => {
     expect(shoulderSpan / totalHeight).toBeLessThan(0.4);
   });
 
-  test("carries route identity on PPE only, over muted workwear", () => {
+  test("uses consistent blue hard-hat PPE over muted workwear", () => {
     const worker = createWarehouseWorkerVisual("#2f5d9e");
     const recommended = createWarehouseWorkerVisual("#2f7d5f");
     const identityParts = worker.parts
       .filter((candidate, index) => candidate.color !== recommended.parts[index].color)
       .map(({ id }) => id);
 
-    // Only the hard hat carries route identity; the vest is real hi-vis PPE.
-    expect(identityParts).toEqual(["hard-hat", "hard-hat-brim"]);
+    expect(identityParts).toEqual([]);
+    expect(worker.parts.find(({ id }) => id === "hard-hat")?.color)
+      .toBe(WAREHOUSE_WORKER_COLORS.hardHat);
+    expect(worker.parts.find(({ id }) => id === "hard-hat-brim")?.color)
+      .toBe(WAREHOUSE_WORKER_COLORS.hardHat);
     expect(worker.parts.find(({ id }) => id === "vest")?.color)
       .toBe(WAREHOUSE_WORKER_COLORS.hiVis);
     // Trousers, torso, and boots are workwear, not identity paint.
@@ -778,6 +781,8 @@ describe("operator locomotion", () => {
     expect(WAREHOUSE_OPERATOR_CLIPS.idle).toBe("Man_Idle");
     expect(WAREHOUSE_OPERATOR_BONES.hand).toBe("MiddleHandR");
     expect(WAREHOUSE_OPERATOR_BONES.head).toBe("Head");
+    expect(WAREHOUSE_OPERATOR_BONES.torso).toBe("Torso");
+    expect(WAREHOUSE_WORKER_COLORS.reflective).toBe("#e7eef2");
   });
 
   test("scales the body to its target stature and nothing else", () => {

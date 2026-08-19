@@ -565,6 +565,65 @@ const WarehouseRacks = memo(function WarehouseRacks({
   );
 });
 
+/** Static material-handling context; it never receives simulation state. */
+const WarehouseIndustrialContext = memo(function WarehouseIndustrialContext({
+  environment,
+}: { environment: Warehouse3DEnvironment }) {
+  const { forklift, bollards, barriers } = environment.industrialContext;
+  return (
+    <>
+      <group position={forklift.center} rotation={[0, forklift.yawRadians, 0]}>
+        <mesh position={[0, 0.42, 0.18]}>
+          <boxGeometry args={[0.78, 0.62, 0.92]} />
+          <meshStandardMaterial {...WAREHOUSE_3D_MATERIALS.forkliftPaint} />
+        </mesh>
+        <mesh position={[0, 0.68, 0.42]}>
+          <boxGeometry args={[0.76, 0.34, 0.45]} />
+          <meshStandardMaterial {...WAREHOUSE_3D_MATERIALS.forkliftPaint} />
+        </mesh>
+        <mesh position={[0, 0.82, 0.02]}>
+          <boxGeometry args={[0.5, 0.12, 0.38]} />
+          <meshStandardMaterial {...WAREHOUSE_3D_MATERIALS.forkliftSeat} />
+        </mesh>
+        {[-0.33, 0.33].flatMap((x) => [-0.18, 0.38].map((z) => (
+          <mesh key={`guard-${x}-${z}`} position={[x, 1.14, z]}>
+            <boxGeometry args={[0.045, 1.02, 0.045]} />
+            <meshStandardMaterial {...WAREHOUSE_3D_MATERIALS.forkliftDark} />
+          </mesh>
+        )))}
+        <mesh position={[0, 1.63, 0.1]}>
+          <boxGeometry args={[0.78, 0.055, 0.68]} />
+          <meshStandardMaterial {...WAREHOUSE_3D_MATERIALS.forkliftDark} />
+        </mesh>
+        {[-0.27, 0.27].map((x) => (
+          <mesh key={`mast-${x}`} position={[x, 0.86, -0.55]}>
+            <boxGeometry args={[0.075, 1.55, 0.075]} />
+            <meshStandardMaterial {...WAREHOUSE_3D_MATERIALS.forkliftDark} />
+          </mesh>
+        ))}
+        <mesh position={[0, 0.34, -0.58]}>
+          <boxGeometry args={[0.66, 0.1, 0.1]} />
+          <meshStandardMaterial {...WAREHOUSE_3D_MATERIALS.forkliftDark} />
+        </mesh>
+        {[-0.23, 0.23].map((x) => (
+          <mesh key={`fork-${x}`} position={[x, 0.085, -0.93]}>
+            <boxGeometry args={[0.08, 0.055, 0.82]} />
+            <meshStandardMaterial {...WAREHOUSE_3D_MATERIALS.forkliftDark} />
+          </mesh>
+        ))}
+        {[-0.43, 0.43].flatMap((x) => [-0.31, 0.39].map((z) => (
+          <mesh key={`wheel-${x}-${z}`} position={[x, 0.25, z]} rotation={[0, 0, Math.PI / 2]}>
+            <cylinderGeometry args={[z > 0 ? 0.24 : 0.19, z > 0 ? 0.24 : 0.19, 0.12, 14]} />
+            <meshStandardMaterial {...WAREHOUSE_3D_MATERIALS.forkliftTyre} />
+          </mesh>
+        )))}
+      </group>
+      <InstancedEnvironmentBoxes visuals={bollards} {...WAREHOUSE_3D_MATERIALS.safety} />
+      <InstancedEnvironmentBoxes visuals={barriers} {...WAREHOUSE_3D_MATERIALS.safety} />
+    </>
+  );
+});
+
 /** Counted locations step down to a neutral, low-priority cue so the active one dominates. */
 const COMPLETED_LOCATION_COLOR = WAREHOUSE_3D_MATERIALS.completedLocation;
 
@@ -1134,6 +1193,7 @@ function RiggedOperatorFigure({
   const { invalidate } = useThree();
   const scannerRef = useRef<Group>(null);
   const hatRef = useRef<Group>(null);
+  const vestRef = useRef<Group>(null);
 
   const rig = useMemo(() => {
     const clone = SkeletonUtils.clone(scene) as Group;
@@ -1180,10 +1240,11 @@ function RiggedOperatorFigure({
       return created;
     };
 
-    const bones: Record<string, Object3D | null> = { hand: null, head: null };
+    const bones: Record<string, Object3D | null> = { hand: null, head: null, torso: null };
     clone.traverse((object) => {
       if (object.name === WAREHOUSE_OPERATOR_BONES.hand) bones.hand = object;
       if (object.name === WAREHOUSE_OPERATOR_BONES.head) bones.head = object;
+      if (object.name === WAREHOUSE_OPERATOR_BONES.torso) bones.torso = object;
     });
 
     const idle = action(WAREHOUSE_OPERATOR_CLIPS.idle);
@@ -1220,6 +1281,7 @@ function RiggedOperatorFigure({
       idle,
       hand: bones.hand,
       head: bones.head,
+      torso: bones.torso,
       calibration: createWarehouseAnatomicalCalibration(clone),
       stature: stature > 0 ? stature : 1,
       groundOffset: Number.isFinite(bounds.min.y) ? bounds.min.y : 0,
@@ -1263,6 +1325,7 @@ function RiggedOperatorFigure({
     for (const [bone, holder] of [
       [rig.hand, scannerRef.current],
       [rig.head, hatRef.current],
+      [rig.torso, vestRef.current],
     ] as const) {
       const parent = holder?.parent;
       if (!bone || !holder || !parent) continue;
@@ -1306,14 +1369,26 @@ function RiggedOperatorFigure({
           <sphereGeometry args={[
             WAREHOUSE_OPERATOR_HAT.shellRadius, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2,
           ]} />
-          <meshStandardMaterial color={WAREHOUSE_WORKER_COLORS.safety} roughness={0.5} />
+          <meshStandardMaterial color={WAREHOUSE_WORKER_COLORS.hardHat} roughness={0.5} />
         </mesh>
         <mesh position={[0, WAREHOUSE_OPERATOR_HAT.lift + 0.004, WAREHOUSE_OPERATOR_HAT.brimReach]}>
           <boxGeometry args={[
             WAREHOUSE_OPERATOR_HAT.shellRadius * 1.5, 0.014, WAREHOUSE_OPERATOR_HAT.brimDepth,
           ]} />
-          <meshStandardMaterial color={WAREHOUSE_WORKER_COLORS.safety} roughness={0.5} />
+          <meshStandardMaterial color={WAREHOUSE_WORKER_COLORS.hardHat} roughness={0.5} />
         </mesh>
+      </group>
+      <group ref={vestRef}>
+        {[-0.06, 0.07].map((height) => (
+          <mesh key={height} position={[0, height, 0.105]} castShadow={false}>
+            <boxGeometry args={[0.31, 0.035, 0.012]} />
+            <meshStandardMaterial
+              color={WAREHOUSE_WORKER_COLORS.reflective}
+              roughness={0.72}
+              metalness={0.04}
+            />
+          </mesh>
+        ))}
       </group>
     </>
   );
@@ -1611,6 +1686,7 @@ function Warehouse3DScene({
       <WarehouseFloor environment={environment} />
       <WarehouseShell environment={environment} />
       <WarehouseRacks environment={environment} detailLevel={environmentDetailLevel} />
+      <WarehouseIndustrialContext environment={environment} />
       <WarehouseLocations
         graph={graph}
         coordinates={coordinates}

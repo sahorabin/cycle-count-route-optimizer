@@ -205,8 +205,8 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getAllByText("Ready")).toHaveLength(2);
     expect(screen.queryByText("Route to replay")).toBeNull();
     expect(container.querySelectorAll('input[type="radio"]')).toHaveLength(0);
-    expect(screen.getByRole("button", { name: "3D" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("button", { name: "2D" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.queryByRole("button", { name: "3D" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "2D" })).toBeNull();
     expect(screen.getByRole("group", { name: "View" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Compare" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("navigation", { name: "Camera tools" })).toBeTruthy();
@@ -248,7 +248,7 @@ describe("RouteSimulationComparison", () => {
     expect(frames.pendingCount()).toBe(1);
   });
 
-  test("drops 3D-only tooling in 2D while keeping the view and playback state", () => {
+  test("keeps simulation 3D-only with camera tooling and the warehouse minimap", () => {
     const { container } = setupComparison();
     const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
     fireEvent.change(seek, { target: { value: 30 } });
@@ -258,40 +258,29 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getByRole("navigation", { name: "Camera tools" })).toBeTruthy();
     expect(container.querySelector(".twin__minimap")).not.toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "2D" }));
-    // The camera rail and minimap belong to the 3D stage only.
-    expect(screen.queryByRole("navigation", { name: "Camera tools" })).toBeNull();
-    expect(container.querySelector(".twin__minimap")).toBeNull();
-    // The chosen view and the clock survive the renderer switch.
+    expect(screen.queryByRole("button", { name: "2D" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "3D" })).toBeNull();
+    expect(screen.getByRole("navigation", { name: "Camera tools" })).toBeTruthy();
+    expect(container.querySelector(".twin__minimap")).not.toBeNull();
     expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Explore" }).getAttribute("aria-pressed")).toBe("true");
     expect(seek.value).toBe("30");
     expect(screen.getByRole("button", { name: "10×" }).getAttribute("aria-pressed")).toBe("true");
 
-    fireEvent.click(screen.getByRole("button", { name: "3D" }));
-    expect(screen.getByRole("navigation", { name: "Camera tools" })).toBeTruthy();
-    expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(1);
-    expect(seek.value).toBe("30");
   });
 
-  test("survives rapid renderer and layout remount sequences without resetting shared state", () => {
+  test("survives rapid Explore/Compare layout changes without resetting shared state", () => {
     const { container } = setupComparison();
     const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
     fireEvent.change(seek, { target: { value: 25 } });
     fireEvent.click(screen.getByRole("button", { name: "5×" }));
 
-    for (let index = 0; index < 10; index += 1) {
-      fireEvent.click(screen.getByRole("button", { name: "2D" }));
-      fireEvent.click(screen.getByRole("button", { name: "3D" }));
-    }
     for (let index = 0; index < 4; index += 1) {
       fireEvent.click(screen.getByRole("button", { name: "Explore" }));
       fireEvent.click(screen.getByRole("button", { name: "Compare" }));
-      fireEvent.click(screen.getByRole("button", { name: "2D" }));
-      fireEvent.click(screen.getByRole("button", { name: "3D" }));
     }
 
-    expect(screen.getByRole("button", { name: "3D" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByRole("button", { name: "2D" })).toBeNull();
     expect(screen.getByRole("button", { name: "Compare" }).getAttribute("aria-pressed"))
       .toBe("true");
     expect(container.querySelectorAll('[data-simulation-viewport]')).toHaveLength(2);
@@ -299,7 +288,7 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getByRole("button", { name: "5×" }).getAttribute("aria-pressed")).toBe("true");
   });
 
-  test("preserves active service truth across 3D and 2D renderer remounts", () => {
+  test("preserves active service truth in the authoritative 3D renderer", () => {
     const { container, workerTimeline } = setupComparison();
     const service = workerTimeline.phases.find(
       (phase) => phase.kind === "service" && phase.durationSeconds > 0,
@@ -317,9 +306,7 @@ describe("RouteSimulationComparison", () => {
     expect(workerActivity()?.getAttribute("data-service-location")).toBe(service.locationId);
     expect(Number(workerActivity()?.getAttribute("data-service-progress"))).toBeCloseTo(0.5);
 
-    fireEvent.click(screen.getByRole("button", { name: "2D" }));
-    fireEvent.click(screen.getByRole("button", { name: "3D" }));
-
+    expect(screen.queryByRole("button", { name: "2D" })).toBeNull();
     expect(Number(seek.value)).toBe(serviceMidpoint);
     expect(workerActivity()?.getAttribute("data-simulation-activity")).toBe("service");
     expect(workerActivity()?.getAttribute("data-service-location")).toBe(service.locationId);
@@ -327,7 +314,7 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getByRole("button", { name: "5×" }).getAttribute("aria-pressed")).toBe("true");
   });
 
-  test("switches both renderers without resetting shared time, playback state, rate, or snapshots", () => {
+  test("keeps shared time, playback state, rate, and snapshots in 3D", () => {
     const frames = installAnimationFrameHarness();
     const { container, workerTimeline, recommendedTimeline } = setupComparison();
     const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
@@ -346,20 +333,20 @@ describe("RouteSimulationComparison", () => {
       '[data-simulation-viewport] [data-testid="simulation-marker"]',
     )].map((marker) => marker.getAttribute("transform"));
 
-    fireEvent.click(screen.getByRole("button", { name: "2D" }));
+    fireEvent.click(screen.getByRole("button", { name: "Explore" }));
     expect(seek.value).toBe(String(sharedTime));
     expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "5×" }).getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+    expect(seek.value).toBe(String(sharedTime));
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(frames.pendingCount()).toBe(1);
     expect([...container.querySelectorAll(".route-simulation-viewport__status")]
       .map((status) => status.textContent)).toEqual(statusBefore);
     expect([...container.querySelectorAll(
       '[data-simulation-viewport] [data-testid="simulation-marker"]',
     )].map((marker) => marker.getAttribute("transform"))).toEqual(markersBefore);
-
-    fireEvent.click(screen.getByRole("button", { name: "3D" }));
-    expect(seek.value).toBe(String(sharedTime));
-    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
-    expect(frames.pendingCount()).toBe(1);
   });
 
   test("makes the controlled comparison conditions explicit", () => {
@@ -462,6 +449,37 @@ describe("RouteSimulationComparison", () => {
     expect(markers[1].getAttribute("transform")).toContain("-13.5 -8.5");
   });
 
+  test("uses the viewport play CTA as the primary start and restores it after reset", () => {
+    const frames = installAnimationFrameHarness();
+    const { container } = setupComparison("en", "explore");
+
+    const primaryStart = screen.getByRole("button", { name: /Play simulation/ });
+    expect(container.querySelector(".twin__center-play")).not.toBeNull();
+    fireEvent.click(primaryStart);
+
+    expect(screen.queryByRole("button", { name: /Play simulation/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(frames.pendingCount()).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect(screen.getByRole("button", { name: /Play simulation/ })).toBeTruthy();
+    expect((screen.getByLabelText("Replay position") as HTMLInputElement).value).toBe("0");
+  });
+
+  test("expands and shrinks the minimap without changing simulation time", () => {
+    const { container } = setupComparison("en", "explore");
+    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+    fireEvent.change(seek, { target: { value: "12" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand minimap" }));
+    expect(container.querySelector(".twin__minimap--expanded")).not.toBeNull();
+    expect(seek.value).toBe("12");
+
+    fireEvent.click(screen.getByRole("button", { name: "Shrink minimap" }));
+    expect(container.querySelector(".twin__minimap--expanded")).toBeNull();
+    expect(seek.value).toBe("12");
+  });
+
   test("one RAF loop advances the shared clock after the short route completes", () => {
     const frames = installAnimationFrameHarness();
     const { container, workerTimeline, recommendedTimeline } = setupComparison();
@@ -523,8 +541,8 @@ describe("RouteSimulationComparison", () => {
     expect(screen.getByText("방문 경로 순서만 다릅니다.")).toBeTruthy();
     expect(screen.getAllByText("준비")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "재생" })).toBeTruthy();
-    expect(screen.getByRole("group", { name: "창고 보기" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "보기 방식" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "2D" })).toBeNull();
     expect(screen.getByRole("button", { name: "카메라 초기화" })).toBeTruthy();
     expect(screen.getAllByText("이동")).toHaveLength(1);
     expect(screen.getAllByText("재고 조사")).toHaveLength(1);
@@ -610,7 +628,7 @@ describe("counting HUD", () => {
     )?.getAttribute("data-simulation-activity")).toBe("travel");
   });
 
-  test("survives renderer and view-mode switching mid-count without losing counting truth", () => {
+  test("survives view-mode switching mid-count without losing counting truth", () => {
     const { container, workerTimeline } = setupComparison();
     const { service, midpoint } = serviceMidpointOf(workerTimeline);
     const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
@@ -630,10 +648,7 @@ describe("counting HUD", () => {
     };
 
     expectCounting();
-    fireEvent.click(screen.getByRole("button", { name: "2D" }));
-    expectCounting();
-    fireEvent.click(screen.getByRole("button", { name: "3D" }));
-    expectCounting();
+    expect(screen.queryByRole("button", { name: "2D" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Explore" }));
     expect(Number(workerHud()?.getAttribute("data-service-progress"))).toBeCloseTo(0.5);
     fireEvent.click(screen.getByRole("button", { name: "Compare" }));

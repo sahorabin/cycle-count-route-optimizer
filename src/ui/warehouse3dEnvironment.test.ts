@@ -138,6 +138,60 @@ describe("warehouse3dEnvironment", () => {
       expect(prop.center[1]).toBeGreaterThan(0);
       expect(prop.center[1]).toBeLessThan(WAREHOUSE_3D_ENVIRONMENT.shelfLevels[0]);
     }
+    expect(staged.filter(({ kind }) => kind === "pallet")).toHaveLength(3);
+    expect(staged.filter(({ kind }) => kind === "carton")).toHaveLength(2);
+  });
+
+  test("places one finite static forklift inside the floor and outside operational footprints", () => {
+    const transform = createWarehouse3DTransform(largeWarehouse);
+    const environment = buildWarehouse3DEnvironment(largeWarehouse, transform);
+    const { forklift } = environment.industrialContext;
+    const [floorX, , floorZ] = environment.boundary.floor.center;
+    const [floorWidth, , floorDepth] = environment.boundary.floor.size;
+    const [x, y, z] = forklift.center;
+    const [width, height, depth] = forklift.size;
+    const overlap = (minX: number, maxX: number, minZ: number, maxZ: number) =>
+      Math.min(x + width / 2, maxX) - Math.max(x - width / 2, minX) > 1e-9
+      && Math.min(z + depth / 2, maxZ) - Math.max(z - depth / 2, minZ) > 1e-9;
+
+    expect(allNumbers(forklift).every(Number.isFinite)).toBe(true);
+    expect(y).toBe(0);
+    expect(x - width / 2).toBeGreaterThanOrEqual(floorX - floorWidth / 2);
+    expect(x + width / 2).toBeLessThanOrEqual(floorX + floorWidth / 2);
+    expect(z - depth / 2).toBeGreaterThanOrEqual(floorZ - floorDepth / 2);
+    expect(z + depth / 2).toBeLessThanOrEqual(floorZ + floorDepth / 2);
+    expect(height).toBeGreaterThan(1.5);
+    for (const rack of environment.racks) {
+      expect(overlap(rack.footprint.minX, rack.footprint.maxX,
+        rack.footprint.minZ, rack.footprint.maxZ)).toBe(false);
+    }
+    for (const point of [largeWarehouse.start, ...largeWarehouse.locations]) {
+      const world = projectDisplayPointToWarehouse3D(point, transform);
+      expect(overlap(world.x - 0.2, world.x + 0.2, world.z - 0.2, world.z + 0.2)).toBe(false);
+    }
+  });
+
+  test("keeps safety context deterministic, bounded, and clear of racks", () => {
+    const transform = createWarehouse3DTransform(largeWarehouse);
+    const first = buildWarehouse3DEnvironment(largeWarehouse, transform);
+    const second = buildWarehouse3DEnvironment(largeWarehouse, transform);
+    const safety = [...first.industrialContext.bollards, ...first.industrialContext.barriers];
+
+    expect(second.industrialContext).toEqual(first.industrialContext);
+    expect(first.industrialContext.bollards).toHaveLength(4);
+    expect(first.industrialContext.barriers).toHaveLength(3);
+    expect(allNumbers(safety).every(Number.isFinite)).toBe(true);
+    for (const visual of safety) {
+      const [x, , z] = visual.center;
+      const [width, , depth] = visual.size;
+      for (const rack of first.racks) {
+        const overlapX = Math.min(x + width / 2, rack.footprint.maxX)
+          - Math.max(x - width / 2, rack.footprint.minX);
+        const overlapZ = Math.min(z + depth / 2, rack.footprint.maxZ)
+          - Math.max(z - depth / 2, rack.footprint.minZ);
+        expect(overlapX > 1e-9 && overlapZ > 1e-9).toBe(false);
+      }
+    }
   });
 
   test("fits imported rack bays exactly inside the existing footprint", () => {

@@ -124,12 +124,12 @@ export function createWarehouseStoryCameraView(
 
 const PRESET_CONFIG = {
   overview: {
-    offset: [15, 19, 15] as const,
-    zoomRatio: 1,
+    offset: [14, 17, 14] as const,
+    zoomRatio: 1.12,
   },
   top: {
-    offset: [0.5, 29, 2.5] as const,
-    zoomRatio: 1.05,
+    offset: [0.5, 29, 1.4] as const,
+    zoomRatio: 1.12,
   },
   aisle: {
     offset: [22, 7.5, 2] as const,

@@ -16,12 +16,12 @@ import { TargetSelector } from "./components/TargetSelector";
 import { WarehouseMap, type RouteVisibility } from "./components/WarehouseMap";
 import { ManualRouteEditor } from "./components/ManualRouteEditor";
 import { ProgressPanel } from "./components/ProgressPanel";
-import { ComparisonHero } from "./components/ComparisonHero";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
-import { TechnicalDetails } from "./components/TechnicalDetails";
 import { WorkflowSteps, type WorkflowStep } from "./components/WorkflowSteps";
 import type { ReplayRouteInput } from "./components/RouteSimulationReplay";
 import { RouteSimulationComparison } from "./components/RouteSimulationComparison";
+import { DigitalTwinPlanningWorkspace } from "./components/DigitalTwinPlanningWorkspace";
+import type { WorkspacePanel } from "./components/WorkspacePanels";
 import "./App.css";
 
 const KNOWN_LOCATION_IDS = new Set(largeWarehouse.locations.map((l) => l.id));
@@ -34,6 +34,10 @@ function sanitizeKnownIds(ids: string[]): NodeId[] {
   return ids.filter((id) => KNOWN_LOCATION_IDS.has(id));
 }
 
+function sanitizeSelectableIds(ids: string[], completedIds: ReadonlySet<NodeId>): NodeId[] {
+  return sanitizeKnownIds(ids).filter((id) => !completedIds.has(id));
+}
+
 /**
  * Restores the manual route's stop order, but only for ids that are both
  * known to the fixture and present in the restored selection -- the manual
@@ -41,14 +45,21 @@ function sanitizeKnownIds(ids: string[]): NodeId[] {
  * invariant `toggleSelected` enforces during live editing. Also de-dupes,
  * since storage could in principle contain a stale/tampered duplicate.
  */
-function sanitizeManualRouteStopIds(ids: string[], selectedIds: ReadonlySet<NodeId>): NodeId[] {
+function sanitizeManualRouteStopIds(ids: string[], selectedIds: NodeId[]): NodeId[] {
+  const selectedSet = new Set(selectedIds);
   const seen = new Set<NodeId>();
   const result: NodeId[] = [];
   for (const id of sanitizeKnownIds(ids)) {
-    if (selectedIds.has(id) && !seen.has(id)) {
+    if (selectedSet.has(id) && !seen.has(id)) {
       seen.add(id);
       result.push(id);
     }
+  }
+  // Migrate older persisted sessions where target selection and route
+  // construction were separate: selected destinations missing from the old
+  // manual route are appended deterministically in their saved selection order.
+  for (const id of selectedIds) {
+    if (!seen.has(id)) result.push(id);
   }
   return result;
 }
@@ -107,33 +118,53 @@ function computeRecommendedRoute(graph: WarehouseGraph, stopIds: NodeId[]): Rout
   }
 }
 
-function computeWorkflowStep(selectedCount: number, manualStopCount: number): WorkflowStep {
+function computeWorkflowStep(selectedCount: number, comparisonRequested: boolean): WorkflowStep {
   if (selectedCount === 0) return 1;
-  if (manualStopCount < 2) return 2;
-  return 3;
+  return comparisonRequested ? 3 : 2;
 }
 
 function Dashboard({ persisted }: { persisted: PersistedState }) {
   const { t } = useTranslation();
+  const restoredCompletedIds = useMemo(
+    () => new Set(sanitizeKnownIds(persisted.completedIds)),
+    [persisted.completedIds],
+  );
+  const restoredSelectedIds = useMemo(
+    () => sanitizeSelectableIds(persisted.selectedIds, restoredCompletedIds),
+    [persisted.selectedIds, restoredCompletedIds],
+  );
 
   const [selected, setSelected] = useState<Set<NodeId>>(
-    () => new Set(sanitizeKnownIds(persisted.selectedIds)),
+    () => new Set(restoredSelectedIds),
   );
   const [completedIds, setCompletedIds] = useState<Set<NodeId>>(
-    () => new Set(sanitizeKnownIds(persisted.completedIds)),
+    () => restoredCompletedIds,
   );
+  const [lastCompletedSelection, setLastCompletedSelection] = useState<Set<NodeId>>(new Set());
+  const [planningInteractionVersion, setPlanningInteractionVersion] = useState(0);
   const [targetCount, setTargetCount] = useState(persisted.targetCount);
   const [walkingSpeed, setWalkingSpeed] = useState(persisted.walkingSpeed);
   const [search, setSearch] = useState("");
   const [zone, setZone] = useState("");
   const [comparisonRequested, setComparisonRequested] = useState(persisted.comparisonRequested);
   const [routeVisibility, setRouteVisibility] = useState<RouteVisibility>("both");
-  const manualRoute = useManualRoute(
-    sanitizeManualRouteStopIds(persisted.manualRouteStopIds, new Set(sanitizeKnownIds(persisted.selectedIds))),
+  const [workerRouteAdjusted, setWorkerRouteAdjusted] = useState(
+    () => {
+      const selectedIds = sanitizeKnownIds(persisted.selectedIds);
+      const selectableIds = selectedIds.filter((id) => !restoredCompletedIds.has(id));
+      const restored = sanitizeManualRouteStopIds(persisted.manualRouteStopIds, selectableIds);
+      return restored.some((id, index) => id !== selectableIds[index]);
+    },
   );
-  const routeEditorRef = useRef<HTMLDivElement>(null);
-  const comparisonResultRef = useRef<HTMLElement>(null);
-  const [resultFocusRequest, setResultFocusRequest] = useState(0);
+  const [workspacePanel, setWorkspacePanel] = useState<WorkspacePanel>(
+    () => persisted.selectedIds.length === 0 ? null : "route",
+  );
+  const [guidedExperienceStarted, setGuidedExperienceStarted] = useState(
+    () => persisted.selectedIds.length > 0 || persisted.comparisonRequested,
+  );
+  const manualRoute = useManualRoute(
+    sanitizeManualRouteStopIds(persisted.manualRouteStopIds, restoredSelectedIds),
+  );
 
   // Any edit to the manual route invalidates a previously generated
   // comparison -- the worker must explicitly re-generate it, so the
@@ -239,138 +270,232 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
     };
   }, [manualComputation, manualRouteData, recommendedComputation, walkingSpeed]);
 
-  const currentStep = computeWorkflowStep(selected.size, manualRoute.stopIds.length);
+  const currentStep = computeWorkflowStep(selected.size, comparisonRequested);
   const simulationInputKey = useMemo(() => [...selected].sort().join("|"), [selected]);
-  const comparisonResultReady = comparisonRequested && replayInputs !== null;
-
-  // Move keyboard and visual attention to the newly generated result. A
-  // request counter makes repeat generation deterministic without relying on
-  // a timeout, while restored persisted results remain passive on mount.
-  useEffect(() => {
-    if (!comparisonResultReady || resultFocusRequest === 0) return;
-    comparisonResultRef.current?.focus({ preventScroll: true });
-    comparisonResultRef.current?.scrollIntoView?.({ block: "start" });
-  }, [comparisonResultReady, resultFocusRequest]);
 
   function toggleSelected(id: NodeId) {
+    if (completedIds.has(id)) return;
+    setPlanningInteractionVersion((version) => version + 1);
+    const next = new Set(selected);
+    if (next.has(id)) {
+      next.delete(id);
+      manualRoute.removeStop(id);
+    } else {
+      next.add(id);
+      manualRoute.addStop(id);
+    }
+    setSelected(next);
+  }
+
+  function selectVisibleInOrder(ids: NodeId[]) {
+    setPlanningInteractionVersion((version) => version + 1);
+    const next = new Set(selected);
+    for (const id of ids) {
+      if (completedIds.has(id)) continue;
+      if (next.has(id)) continue;
+      next.add(id);
+      manualRoute.addStop(id);
+    }
+    setSelected(next);
+  }
+
+  function removeSelectedStop(id: NodeId) {
+    setPlanningInteractionVersion((version) => version + 1);
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-        // Today's target list is the source of truth for what may appear
-        // in the route -- dropping a target also drops it from the route,
-        // so the two never disagree about which locations are in play.
-        manualRoute.removeStop(id);
-      } else {
-        next.add(id);
-      }
+      next.delete(id);
       return next;
     });
+    manualRoute.removeStop(id);
+  }
+
+  function clearSelectedStops() {
+    setPlanningInteractionVersion((version) => version + 1);
+    setSelected(new Set());
+    manualRoute.clear();
+    setWorkerRouteAdjusted(false);
+  }
+
+  function moveWorkerStop(fromIndex: number, toIndex: number) {
+    if (fromIndex === toIndex) return;
+    manualRoute.moveStop(fromIndex, toIndex);
+    setWorkerRouteAdjusted(true);
+    setPlanningInteractionVersion((version) => version + 1);
+  }
+
+  function moveWorkerStopUp(index: number) {
+    if (index <= 0) return;
+    manualRoute.moveUp(index);
+    setWorkerRouteAdjusted(true);
+    setPlanningInteractionVersion((version) => version + 1);
+  }
+
+  function moveWorkerStopDown(index: number) {
+    if (index >= manualRoute.stopIds.length - 1) return;
+    manualRoute.moveDown(index);
+    setWorkerRouteAdjusted(true);
+    setPlanningInteractionVersion((version) => version + 1);
   }
 
   function markSelectedComplete() {
+    const completedNow = new Set(selected);
+    if (completedNow.size === 0) return;
     setCompletedIds((prev) => {
       const next = new Set(prev);
-      selected.forEach((id) => next.add(id));
+      completedNow.forEach((id) => next.add(id));
       return next;
     });
+    setLastCompletedSelection(completedNow);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      completedNow.forEach((id) => next.delete(id));
+      return next;
+    });
+    manualRoute.removeStops(completedNow);
+    setPlanningInteractionVersion((version) => version + 1);
   }
 
   function undoSelectedCompletion() {
     setCompletedIds((prev) => {
       const next = new Set(prev);
-      selected.forEach((id) => next.delete(id));
+      lastCompletedSelection.forEach((id) => next.delete(id));
       return next;
     });
+    setLastCompletedSelection(new Set());
+    setPlanningInteractionVersion((version) => version + 1);
   }
 
   function generateComparison() {
     if (!manualComputation || !recommendedComputation || manualRoute.stopIds.length < 2) return;
     setComparisonRequested(true);
-    setResultFocusRequest((request) => request + 1);
+    setPlanningInteractionVersion((version) => version + 1);
+    setWorkspacePanel(null);
   }
+
+  function changeWorkspacePanel(panel: WorkspacePanel) {
+    if (panel) setGuidedExperienceStarted(true);
+    if (panel === "route") setPlanningInteractionVersion((version) => version + 1);
+    setWorkspacePanel(panel);
+  }
+
+  const progressPanel = (
+    <ProgressPanel
+      targetCount={targetCount}
+      completedIds={completedIds}
+      selectedIds={selected}
+      onTargetCountChange={setTargetCount}
+      onMarkSelectedComplete={markSelectedComplete}
+      onUndoSelectedCompletion={undoSelectedCompletion}
+      undoAvailable={lastCompletedSelection.size > 0}
+    />
+  );
+  const progressDisclosure = (
+    <details className="workspace-progress-disclosure">
+      <summary>{t("progress.title")}</summary>
+      {progressPanel}
+    </details>
+  );
+  const planningSummary = (
+    <div className="workspace-planning-summary">
+      <section className="workspace-next-step" aria-labelledby="workspace-next-step-title">
+        <span>{t("workspace.nextStep")}</span>
+        <h2 id="workspace-next-step-title">
+          {currentStep === 1 ? t("workflow.step1") : t("workflow.step2")}
+        </h2>
+        <p>
+          {currentStep === 1
+            ? t("workspace.selectPrompt")
+            : t("workspace.routePrompt", { count: selected.size })}
+        </p>
+        <button
+          type="button"
+          className="workspace-next-step__action"
+          onClick={() => {
+            setGuidedExperienceStarted(true);
+            setWorkspacePanel(currentStep === 1 ? "locations" : "route");
+          }}
+        >
+          {currentStep === 1 ? t("workspace.selectLocations") : t("workspace.openRoute")}
+        </button>
+      </section>
+      {progressDisclosure}
+    </div>
+  );
+  const locationsPanel = (
+    <TargetSelector
+      locations={largeWarehouse.locations}
+      selected={selected}
+      orderedIds={manualRoute.stopIds}
+      completedIds={completedIds}
+      search={search}
+      zone={zone}
+      onSearchChange={setSearch}
+      onZoneChange={setZone}
+      onToggle={toggleSelected}
+      onSelectVisible={selectVisibleInOrder}
+      onClearAll={clearSelectedStops}
+      onContinueToRoute={() => setWorkspacePanel("route")}
+    />
+  );
+  const routePanel = (
+    <div className="workspace-route-panel">
+      <div className="workspace-route-panel__settings">
+        <label>
+          {t("comparison.walkingSpeedLabel")}
+          <input
+            type="number"
+            min={1}
+            value={walkingSpeed}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              if (Number.isFinite(value) && value > 0) {
+                setWalkingSpeed(value);
+                setPlanningInteractionVersion((version) => version + 1);
+              }
+            }}
+          />
+        </label>
+        <fieldset>
+          <legend>{t("comparison.routeVisibility")}</legend>
+          {(["worker", "recommended", "both"] as const).map((visibility) => (
+            <label key={visibility}>
+              <input
+                type="radio"
+                name="workspace-route-visibility"
+                checked={routeVisibility === visibility}
+                onChange={() => {
+                  setRouteVisibility(visibility);
+                  setPlanningInteractionVersion((version) => version + 1);
+                }}
+              />
+              {visibility === "worker"
+                ? t("comparison.manual")
+                : visibility === "recommended"
+                  ? t("comparison.recommended")
+                  : t("comparison.toggleBoth")}
+            </label>
+          ))}
+        </fieldset>
+      </div>
+      <ManualRouteEditor
+        stopIds={manualRoute.stopIds}
+        labels={labels}
+        onMoveUp={moveWorkerStopUp}
+        onMoveDown={moveWorkerStopDown}
+        onMove={moveWorkerStop}
+        onRemove={removeSelectedStop}
+        onClear={clearSelectedStops}
+        onGenerate={generateComparison}
+        recommendationValid={comparisonRequested}
+        interactionVersion={planningInteractionVersion}
+      />
+    </div>
+  );
+  const workflow = <WorkflowSteps step={currentStep} />;
+  const languageControl = <LanguageSwitcher />;
 
   return (
     <div className="app">
-      <header className="app__header">
-        <div className="app__identity">
-          <h1>{t("app.title")}</h1>
-          <p className="app__subtitle">{t("app.proposition")}</p>
-          <p className="app__demo-note">{t("app.demoDisclosure")}</p>
-        </div>
-        <LanguageSwitcher />
-      </header>
-
-      <WorkflowSteps step={currentStep} />
-
-      <ComparisonHero
-        step={currentStep}
-        manual={manualComputation}
-        recommended={recommendedComputation}
-        walkingSpeed={walkingSpeed}
-        onWalkingSpeedChange={setWalkingSpeed}
-        manualStopCount={manualRoute.stopIds.length}
-        comparisonRequested={comparisonRequested}
-        routeVisibility={routeVisibility}
-        onRouteVisibilityChange={setRouteVisibility}
-        resultRef={comparisonResultRef}
-      />
-
-      <ProgressPanel
-        targetCount={targetCount}
-        completedIds={completedIds}
-        selectedIds={selected}
-        onTargetCountChange={setTargetCount}
-        onMarkSelectedComplete={markSelectedComplete}
-        onUndoSelectedCompletion={undoSelectedCompletion}
-      />
-
-      <main className="app__main">
-        <TargetSelector
-          locations={largeWarehouse.locations}
-          selected={selected}
-          search={search}
-          zone={zone}
-          onSearchChange={setSearch}
-          onZoneChange={setZone}
-          onToggle={toggleSelected}
-          onSelectVisible={(ids) => setSelected(new Set(ids))}
-          onClearAll={() => {
-            setSelected(new Set());
-            manualRoute.clear();
-          }}
-          onContinueToRoute={() => routeEditorRef.current?.scrollIntoView({ block: "start" })}
-        />
-
-        <WarehouseMap
-          graph={largeWarehouse}
-          selected={selected}
-          visitIds={manualRouteData.visitIds}
-          pathMatrix={manualRouteData.pathMatrix}
-          workerRoute={manualComputation}
-          recommendedRoute={comparisonRequested ? recommendedComputation : null}
-          routeVisibility={routeVisibility}
-          manualStopIds={manualRoute.stopIds}
-          completedIds={completedIds}
-          searchMatchIds={searchMatchIds}
-          onLocationClick={manualRoute.addStop}
-        />
-
-        <div ref={routeEditorRef}>
-          <ManualRouteEditor
-            stopIds={manualRoute.stopIds}
-            labels={labels}
-            onMoveUp={manualRoute.moveUp}
-            onMoveDown={manualRoute.moveDown}
-            onRemove={manualRoute.removeStop}
-            onClear={manualRoute.clear}
-            onGenerate={generateComparison}
-          />
-        </div>
-
-        <TechnicalDetails graph={largeWarehouse} targetIds={manualRoute.stopIds} />
-      </main>
-
       {comparisonRequested && replayInputs ? (
         <RouteSimulationComparison
           graph={largeWarehouse}
@@ -379,8 +504,51 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
           simulationInputKey={simulationInputKey}
           worker={replayInputs.worker}
           recommended={replayInputs.recommended}
+          progressPanel={progressDisclosure}
+          locationsPanel={locationsPanel}
+          routePanel={routePanel}
+          workflow={workflow}
+          languageControl={languageControl}
+          activePanel={workspacePanel}
+          onPanelChange={changeWorkspacePanel}
         />
-      ) : null}
+      ) : (
+        <DigitalTwinPlanningWorkspace
+          summary={planningSummary}
+          viewport={(
+            <WarehouseMap
+              graph={largeWarehouse}
+              selected={selected}
+              visitIds={manualRouteData.visitIds}
+              pathMatrix={manualRouteData.pathMatrix}
+              workerRoute={manualComputation}
+              recommendedRoute={comparisonRequested ? recommendedComputation : null}
+              routeVisibility={routeVisibility}
+              manualStopIds={manualRoute.stopIds}
+              completedIds={completedIds}
+              searchMatchIds={searchMatchIds}
+              workerRouteAdjusted={workerRouteAdjusted}
+              onWorkerRouteReorder={moveWorkerStop}
+            />
+          )}
+          locations={locationsPanel}
+          route={routePanel}
+          workflow={workflow}
+          language={languageControl}
+          guidance={currentStep === 1 ? t("hero.step1Body") : t("hero.step2Body")}
+          showWelcome={!guidedExperienceStarted}
+          onStart={() => {
+            setGuidedExperienceStarted(true);
+            setWorkspacePanel("locations");
+          }}
+          onReopenGuide={() => {
+            setGuidedExperienceStarted(false);
+            setWorkspacePanel(null);
+          }}
+          activePanel={workspacePanel}
+          onPanelChange={changeWorkspacePanel}
+        />
+      )}
     </div>
   );
 }

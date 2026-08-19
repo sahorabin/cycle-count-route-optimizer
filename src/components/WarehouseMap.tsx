@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type DragEvent } from "react";
 import { expandRoutePath } from "../ui/routePath";
 import { buildCoordinateLookup, NN_OFFSET, OPT_OFFSET, pointsAttribute, type Point } from "../ui/svgPoints";
 import { computeRackRects, computeWarehouseAisleRects } from "../ui/rackLayout";
@@ -19,7 +19,10 @@ interface WarehouseMapProps {
   completedIds: ReadonlySet<NodeId>;
   searchMatchIds: ReadonlySet<NodeId>;
   simulationMarker?: Point | null;
-  onLocationClick: (id: NodeId) => void;
+  workerRouteAdjusted?: boolean;
+  onWorkerRouteReorder?: (fromIndex: number, toIndex: number) => void;
+  /** @deprecated Route construction is checkbox-driven; retained only for source compatibility. */
+  onLocationClick?: (id: NodeId) => void;
 }
 
 const PADDING = 15;
@@ -55,47 +58,27 @@ function locationState(
 /**
  * One location marker. Hooks (label-reveal-on-hover state) cannot run
  * inside the parent's .map() callback, so each marker is its own
- * component. Only "selected" markers are click/keyboard interactive --
- * clicking assigns the next visit-order sequence number. "available"
- * markers are informational only: choosing today's targets happens in the
- * TargetSelector, never by clicking the map, so the two concepts (select
- * vs. order) never get confused with each other.
+ * component. Markers are visualization-only: the checklist is the single
+ * route-building interaction and supplies the sequence shown here.
  */
 function LocationMarker({
   location,
   state,
   sequence,
   isSearchMatch,
-  onClick,
 }: {
   location: CycleCountLocation;
   state: LocationState;
   sequence: number | null;
   isSearchMatch: boolean;
-  onClick: () => void;
 }) {
   const [revealed, setRevealed] = useState(false);
   const showLabel = revealed || state !== "available" || isSearchMatch;
-  const isClickable = state === "selected";
   // Full labels ("Zone A - Bin 01") are wider than the ~8-unit gap between
   // neighboring markers and would overlap when both are shown at once; the
   // short id-derived code stays legible at that spacing. The full label
   // remains available via aria-label and the native <title> tooltip.
   const shortLabel = location.id.replace(/^loc-/, "");
-
-  const interactiveProps = isClickable
-    ? {
-        tabIndex: 0,
-        role: "button" as const,
-        onClick,
-        onKeyDown: (e: KeyboardEvent) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onClick();
-          }
-        },
-      }
-    : { tabIndex: -1 };
 
   return (
     <g
@@ -111,7 +94,7 @@ function LocationMarker({
       onMouseLeave={() => setRevealed(false)}
       onFocus={() => setRevealed(true)}
       onBlur={() => setRevealed(false)}
-      {...interactiveProps}
+      tabIndex={-1}
     >
       <title>{location.label}</title>
       <circle r={3.2} />
@@ -157,7 +140,8 @@ export function WarehouseMap({
   completedIds,
   searchMatchIds,
   simulationMarker = null,
-  onLocationClick,
+  workerRouteAdjusted = false,
+  onWorkerRouteReorder,
 }: WarehouseMapProps) {
   const { t } = useTranslation();
   const titleId = useId();
@@ -185,6 +169,7 @@ export function WarehouseMap({
   // "View full warehouse" switches to the same fit-to-container rendering
   // used on desktop. On desktop this state has no visual effect.
   const [zoomedOut, setZoomedOut] = useState(false);
+  const [draggedStopIndex, setDraggedStopIndex] = useState<number | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -212,6 +197,7 @@ export function WarehouseMap({
 
   const showWorker = routeVisibility !== "recommended";
   const showRecommended = routeVisibility !== "worker";
+  const workerRouteIsProvisional = Boolean(onWorkerRouteReorder) && !workerRouteAdjusted;
 
   const workerPath = useMemo(
     () => (workerRoute && showWorker ? expandRoutePath(workerRoute.order, visitIds, pathMatrix) : []),
@@ -227,6 +213,42 @@ export function WarehouseMap({
 
   return (
     <div className="warehouse-map">
+      {onWorkerRouteReorder && manualStopIds.length > 0 && (
+        <section className="warehouse-map__order-strip" aria-label={t("manualRoute.mapSequence")}>
+          <span className="warehouse-map__order-title">{t("manualRoute.mapSequence")}</span>
+          <div className="warehouse-map__order-chips">
+            <span className="warehouse-map__order-office">0 · {t("manualRoute.officeShort")}</span>
+            {manualStopIds.map((id, index) => {
+              const label = graph.locations.find((location) => location.id === id)?.label ?? id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  draggable
+                  className={draggedStopIndex === index ? "warehouse-map__order-chip warehouse-map__order-chip--dragging" : "warehouse-map__order-chip"}
+                  onDragStart={(event: DragEvent<HTMLButtonElement>) => {
+                    setDraggedStopIndex(index);
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", String(index));
+                  }}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const from = draggedStopIndex ?? Number(event.dataTransfer.getData("text/plain"));
+                    if (Number.isInteger(from)) onWorkerRouteReorder(from, index);
+                    setDraggedStopIndex(null);
+                  }}
+                  onDragEnd={() => setDraggedStopIndex(null)}
+                  aria-label={t("manualRoute.dragStop", { number: index + 1, label })}
+                >
+                  <span aria-hidden="true">⠿</span>
+                  {index + 1} · {label.replace(/^Zone [A-Z] - /, "")}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
       <button
         type="button"
         className="warehouse-map__zoom-toggle"
@@ -279,7 +301,8 @@ export function WarehouseMap({
           <polyline
             data-route="worker"
             points={pointsAttribute(workerPath, coords, NN_OFFSET)}
-            className="warehouse-map__route warehouse-map__route--worker"
+            className={`warehouse-map__route warehouse-map__route--worker${workerRouteIsProvisional ? " warehouse-map__route--provisional" : " warehouse-map__route--final"}`}
+            data-route-status={workerRouteIsProvisional ? "provisional" : "final"}
           />
         )}
         {recommendedPath.length > 1 && (
@@ -332,7 +355,6 @@ export function WarehouseMap({
                 state={locationState(location.id, selected, manualStopIds, completedIds)}
                 sequence={sequenceIndex === -1 ? null : sequenceIndex + 1}
                 isSearchMatch={searchMatchIds.has(location.id)}
-                onClick={() => onLocationClick(location.id)}
               />
             );
           })}

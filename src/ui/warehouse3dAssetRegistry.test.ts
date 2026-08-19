@@ -100,14 +100,20 @@ describe("asset loading fallback", () => {
   test("resolves to the procedural fallback for any category without a file", async () => {
     clearWarehouseAssetCache();
 
-    // Every category now ships a file, so the fallback path is exercised with a
-    // synthetic id rather than a vacuous filter over an empty list.
+    // Unknown ids and the intentionally procedural forklift share the same
+    // safe loader contract: no fetch and no missing geometry exception.
     const handle = await loadWarehouseAsset("category-with-no-file");
     expect(handle.status).toBe("fallback");
     expect(handle.scene).toBeNull();
     expect(handle.geometry).toBeNull();
     expect(handle.parts).toBeNull();
-    expect(WAREHOUSE_ASSET_REGISTRY.every((entry) => entry.file !== null)).toBe(true);
+    expect(WAREHOUSE_ASSET_REGISTRY.filter((entry) => entry.file === null)
+      .map((entry) => entry.id)).toEqual(["forklift"]);
+    await expect(loadWarehouseAsset("forklift")).resolves.toMatchObject({
+      status: "fallback",
+      scene: null,
+      geometry: null,
+    });
   });
 
   test("survives an asset that cannot be fetched or parsed", async () => {
@@ -577,6 +583,20 @@ describe("rigged operator asset", () => {
     // Compare renders two skeletons; they must share one fetch and one parse.
     expect(loadWarehouseAsset("operator-rigged")).toBe(loadWarehouseAsset("operator-rigged"));
     expect(loadWarehouseAsset("operator-rigged")).not.toBe(loadWarehouseAsset("operator"));
+  });
+});
+
+describe("industrial context asset policy", () => {
+  test("registers a deterministic procedural forklift fallback without a network dependency", () => {
+    const forklift = getWarehouseAssetEntry("forklift");
+
+    expect(forklift?.category).toBe("prop");
+    expect(forklift?.file).toBeNull();
+    expect(forklift?.provenance.source).toBeNull();
+    expect(forklift?.provenance.redistributable).toBe(true);
+    expect(forklift?.provenance.commercialUse).toBe(true);
+    expect(hasWarehouseAssetFile("forklift")).toBe(false);
+    expect(forklift?.note).toMatch(/procedural counterbalance forklift/i);
   });
 });
 

@@ -197,11 +197,12 @@ describe("WarehouseMap", () => {
     expect(container.textContent).toContain(sampleWarehouse.start.label);
   });
 
-  test("clicking a selected (not-yet-routed) location's marker calls onLocationClick with its id", () => {
+  test("map markers remain visualization-only even when a legacy click callback is supplied", () => {
     const onLocationClick = vi.fn();
     const { container } = setup(["loc-A"], new Set(["loc-A"]), { onLocationClick });
     fireEvent.click(container.querySelector('[data-location-id="loc-A"]')!);
-    expect(onLocationClick).toHaveBeenCalledWith("loc-A");
+    expect(onLocationClick).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-location-id="loc-A"]')!.getAttribute("role")).toBeNull();
   });
 
   test("clicking an available (unselected) location does nothing -- selecting happens only in the target selector", () => {

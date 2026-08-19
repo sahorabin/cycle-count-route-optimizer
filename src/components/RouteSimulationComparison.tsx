@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { NodeId, WarehouseGraph } from "../domain/types";
 import { useSimulationPlayback } from "../hooks/useSimulationPlayback";
 import { useTranslation } from "../i18n/useTranslation";
@@ -15,6 +15,10 @@ import { CameraToolbar } from "./CameraToolbar";
 import { OperationsPanel } from "./OperationsPanel";
 import { WarehouseMap } from "./WarehouseMap";
 import {
+  WorkspaceUtilityPanel,
+  type WorkspacePanel,
+} from "./WorkspacePanels";
+import {
   RouteSimulationViewport,
   type ReplayRouteMode,
   type ReplayRouteInput,
@@ -28,10 +32,68 @@ interface RouteSimulationComparisonProps {
   simulationInputKey: string;
   worker: ReplayRouteInput;
   recommended: ReplayRouteInput;
+  progressPanel?: ReactNode;
+  locationsPanel?: ReactNode;
+  routePanel?: ReactNode;
+  workflow?: ReactNode;
+  languageControl?: ReactNode;
+  activePanel?: WorkspacePanel;
+  onPanelChange?: (panel: WorkspacePanel) => void;
 }
 
 const PLAYBACK_RATES = [0.5, 1, 2, 5, 10] as const;
 type SimulationViewMode = "compare" | "explore";
+
+function MovableMinimap({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const drag = useRef<{ pointerId: number; x: number; y: number; originX: number; originY: number } | null>(null);
+
+  const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    drag.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      originX: offset.x,
+      originY: offset.y,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!drag.current || drag.current.pointerId !== event.pointerId) return;
+    setOffset({
+      x: Math.max(-420, Math.min(420, drag.current.originX + event.clientX - drag.current.x)),
+      y: Math.max(-320, Math.min(320, drag.current.originY + event.clientY - drag.current.y)),
+    });
+  };
+  const stopDrag = () => { drag.current = null; };
+
+  return (
+    <aside
+      className={`twin__minimap${expanded ? " twin__minimap--expanded" : ""}`}
+      aria-label={t("twin.minimap")}
+      style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}
+    >
+      <div
+        className="twin__minimap-bar"
+        onPointerDown={startDrag}
+        onPointerMove={moveDrag}
+        onPointerUp={stopDrag}
+        onPointerCancel={stopDrag}
+      >
+        <span>{t("twin.minimap")}</span>
+        <span className="twin__minimap-actions">
+          <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => setOffset({ x: 0, y: 0 })} aria-label={t("workspace.resetMinimap")}>↺</button>
+          <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => setExpanded((value) => !value)} aria-label={expanded ? t("workspace.shrinkMinimap") : t("workspace.expandMinimap")}>
+            {expanded ? "↘" : "↗"}
+          </button>
+        </span>
+      </div>
+      <div className="twin__minimap-map">{children}</div>
+    </aside>
+  );
+}
 
 function formatReplayTime(totalSeconds: number): string {
   const roundedSeconds = Math.max(0, Math.round(totalSeconds));
@@ -58,10 +120,17 @@ export function RouteSimulationComparison({
   simulationInputKey,
   worker,
   recommended,
+  progressPanel,
+  locationsPanel,
+  routePanel,
+  workflow,
+  languageControl,
+  activePanel,
+  onPanelChange,
 }: RouteSimulationComparisonProps) {
   const { t } = useTranslation();
   const comparisonId = useId();
-  const [rendererMode, setRendererMode] = useState<SimulationRendererMode>("3d");
+  const rendererMode: SimulationRendererMode = "3d";
   const [viewMode, setViewMode] = useState<SimulationViewMode>("explore");
   const [exploreRoute, setExploreRoute] = useState<ReplayRouteMode>("worker");
   const [cameraPreset, setCameraPreset] = useState<WarehouseCameraPreset>("overview");
@@ -142,6 +211,8 @@ export function RouteSimulationComparison({
           <p>{t("twin.context")}</p>
         </div>
 
+        <div className="workspace-command-center">{workflow}</div>
+
         <div className="twin__modes">
           <fieldset className="twin__switch">
             <legend>{t("replay.viewMode")}</legend>
@@ -177,35 +248,43 @@ export function RouteSimulationComparison({
             </fieldset>
           ) : null}
 
-          <fieldset className="twin__switch">
-            <legend>{t("replay.renderer")}</legend>
-            <div>
-              {(["3d", "2d"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  aria-pressed={rendererMode === mode}
-                  onClick={() => setRendererMode(mode)}
-                >
-                  {mode === "3d" ? t("replay.renderer3d") : t("replay.renderer2d")}
-                </button>
-              ))}
-            </div>
-          </fieldset>
+          {languageControl}
         </div>
       </header>
 
       <div className="twin__body">
-        <aside className="twin__ops" aria-label={t("twin.operations")}>
-          <OperationsPanel
-            worker={worker}
-            recommended={recommended}
-            workerSnapshot={snapshots.worker}
-            recommendedSnapshot={snapshots.recommended}
-            focus={focusRoute}
-            locationLabels={locationLabels}
+        {onPanelChange ? (
+          <WorkspaceUtilityPanel
+            summary={(
+              <>
+                {progressPanel}
+                <OperationsPanel
+                  worker={worker}
+                  recommended={recommended}
+                  workerSnapshot={snapshots.worker}
+                  recommendedSnapshot={snapshots.recommended}
+                  focus={focusRoute}
+                  locationLabels={locationLabels}
+                />
+              </>
+            )}
+            active={activePanel ?? null}
+            onChange={onPanelChange}
+            locations={locationsPanel}
+            route={routePanel}
           />
-        </aside>
+        ) : (
+          <aside className="twin__ops" aria-label={t("twin.operations")}>
+            <OperationsPanel
+              worker={worker}
+              recommended={recommended}
+              workerSnapshot={snapshots.worker}
+              recommendedSnapshot={snapshots.recommended}
+              focus={focusRoute}
+              locationLabels={locationLabels}
+            />
+          </aside>
+        )}
 
         <div
           className={`twin__stage twin__stage--${viewMode}`}
@@ -239,8 +318,7 @@ export function RouteSimulationComparison({
             </>
           )}
 
-          {rendererMode === "3d" ? (
-            <div className="twin__minimap" aria-label={t("twin.minimap")} role="img">
+          <MovableMinimap>
               <WarehouseMap
                 graph={graph}
                 selected={minimapSelected}
@@ -255,17 +333,24 @@ export function RouteSimulationComparison({
                 simulationMarker={minimapMarker}
                 onLocationClick={() => undefined}
               />
-            </div>
+          </MovableMinimap>
+
+          {!playback.clock.isPlaying && playback.clock.timeSeconds === 0 ? (
+            <button className="twin__center-play" type="button" onClick={playback.play}>
+              <span className="twin__center-play-icon" aria-hidden="true">▶</span>
+              <span>
+                <strong>{t("workspace.playSimulation")}</strong>
+                <small>{t("workspace.playSimulationHint")}</small>
+              </span>
+            </button>
           ) : null}
         </div>
 
-        {rendererMode === "3d" ? (
-          <CameraToolbar
+        <CameraToolbar
             preset={cameraPreset}
             onSelectPreset={selectCameraPreset}
             onReset={() => setCameraResetRequest((request) => request + 1)}
-          />
-        ) : null}
+        />
       </div>
 
       <footer className="twin__timeline" aria-label={t("twin.timeline")}>

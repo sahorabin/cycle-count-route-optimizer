@@ -86,10 +86,10 @@ body {
 }
 
 #root {
-  max-width: 1200px;
+  max-width: 1600px;
   margin: 0 auto;
   min-height: 100svh;
-  padding: 16px;
+  padding: 12px;
 }
 
 h1,

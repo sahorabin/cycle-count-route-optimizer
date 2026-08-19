@@ -54,6 +54,22 @@ export interface WarehouseAssetEntry {
  */
 export const WAREHOUSE_ASSET_REGISTRY: readonly WarehouseAssetEntry[] = [
   {
+    id: "forklift",
+    category: "prop",
+    file: null,
+    provenance: {
+      source: null,
+      license: "none",
+      redistributable: true,
+      attribution: null,
+      commercialUse: true,
+    },
+    envelopeSpan: 2.1,
+    note: "A restrained procedural counterbalance forklift is the deterministic "
+      + "fallback after the capped real-asset search produced no inspectable, "
+      + "license-cleared web asset. It is static renderer context only.",
+  },
+  {
     id: "rack-run",
     category: "rack",
     file: "/assets/warehouse/steel_frame_shelves_01/steel_frame_shelves_01_1k.gltf",

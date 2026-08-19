@@ -25,7 +25,7 @@ describe("WorkflowSteps", () => {
   test("shows all three step labels", () => {
     setup(1);
     expect(screen.getByText("Select locations")).toBeTruthy();
-    expect(screen.getByText("Set visit order")).toBeTruthy();
-    expect(screen.getByText("Compare routes")).toBeTruthy();
+    expect(screen.getByText("Generate & compare")).toBeTruthy();
+    expect(screen.getByText("Play simulation")).toBeTruthy();
   });
 });
