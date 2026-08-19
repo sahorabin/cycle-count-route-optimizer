@@ -60,13 +60,28 @@ export interface WarehouseWorkerPose {
  * carried only by the hi-vis vest and hard hat -- the way a real operator is
  * identifiable -- so the figure reads as PPE instead of a painted game token.
  */
+/**
+ * Real PPE reading, not route paint: a fluorescent hi-vis vest over dark work
+ * clothing. Route identity is carried by the hard hat alone, so both operators
+ * look like the same warehouse worker.
+ */
 export const WAREHOUSE_WORKER_COLORS = {
   skin: "#c2a184",
-  uniform: "#46505f",
-  workwear: "#39414d",
+  uniform: "#39424f",
+  workwear: "#2f3742",
+  hiVis: "#d8e63c",
   safety: "#c8a13a",
-  equipment: "#262b33",
+  equipment: "#20252c",
+  scannerHead: "#3d4854",
 } as const;
+
+/**
+ * Maximum forward extent, in figure-local world units, that any posed part may
+ * reach. The operator stands in a walkable aisle whose clear distance to the
+ * rack face is smaller than a straight arm, so the service pose bends the elbow
+ * and keeps the scanner at chest height instead of pushing it into shelving.
+ */
+export const SERVICE_FORWARD_REACH_LIMIT = 0.24;
 
 const DEFAULT_FACING_YAW = 0;
 const DIRECTION_EPSILON = 1e-9;
@@ -167,12 +182,14 @@ export function createWarehouseWorkerPose(
 
 /** Shoulder pivot of the arm primitives, so a raised arm swings from the shoulder. */
 const SHOULDER_Y = WAREHOUSE_3D_VISUALS.worker.shoulderY;
-const HAND_REACH = 0.55;
-const SCANNER_REACH = 0.6;
-const ARM_CENTER_REACH = 0.26;
+const UPPER_ARM_LENGTH = 0.28;
+const FOREARM_LENGTH = 0.27;
 const ARM_X = 0.235;
-const HAND_X = 0.255;
-const SCANNER_X = 0.265;
+const HAND_X = 0.245;
+/** Shoulder swing and forearm rise during counting, tuned to the reach limit. */
+const SERVICE_SHOULDER_SWING = 0.3;
+const SERVICE_FOREARM_BASE = 0.36;
+const SERVICE_FOREARM_RANGE = 0.09;
 
 /**
  * Parts that follow the upper-body twist during counting. Legs, boots, and the
@@ -180,15 +197,18 @@ const SCANNER_X = 0.265;
  */
 const COUNTING_UPPER_BODY_IDS: ReadonlySet<string> = new Set([
   "torso",
-  "vest-panel",
-  "left-arm",
-  "right-arm",
+  "vest",
+  "left-upper-arm",
+  "right-upper-arm",
+  "left-forearm",
+  "right-forearm",
   "left-hand",
   "right-hand",
   "head",
   "hard-hat",
   "hard-hat-brim",
-  "scanner",
+  "scanner-body",
+  "scanner-head",
 ]);
 
 type PartTransform = {
@@ -205,51 +225,95 @@ function rotateAboutY(
   return [x * cos + z * sin, y, z * cos - x * sin];
 }
 
-/** Position of a point hanging `reach` below the shoulder after swinging forward by `swing`. */
-function swungFromShoulder(
-  x: number,
-  reach: number,
-  swing: number,
-  forwardOffset = 0,
-): readonly [number, number, number] {
-  return [x, SHOULDER_Y - reach * Math.cos(swing), reach * Math.sin(swing) + forwardOffset];
+interface ArmPose {
+  readonly elbow: readonly [number, number];
+  readonly hand: readonly [number, number];
+  readonly upperCenter: readonly [number, number];
+  readonly foreCenter: readonly [number, number];
+  readonly upperPitch: number;
+  readonly forePitch: number;
 }
 
 /**
- * Per-part counting transform. The scanner arm raises and reaches, the support
- * arm swings slightly, and the head dips toward the scanner; everything else
- * keeps its travel placement.
+ * Two-segment arm in the sagittal plane. `shoulderSwing` rotates the upper arm
+ * forward from hanging; `forearmRise` lifts the forearm back up toward the
+ * chest, which is what keeps the hand high without pushing it into the rack.
+ */
+function solveArm(shoulderSwing: number, forearmRise: number): ArmPose {
+  const elbowY = SHOULDER_Y - UPPER_ARM_LENGTH * Math.cos(shoulderSwing);
+  const elbowZ = UPPER_ARM_LENGTH * Math.sin(shoulderSwing);
+  const handY = elbowY + FOREARM_LENGTH * Math.cos(forearmRise);
+  const handZ = elbowZ + FOREARM_LENGTH * Math.sin(forearmRise);
+
+  return {
+    elbow: [elbowY, elbowZ],
+    hand: [handY, handZ],
+    upperCenter: [(SHOULDER_Y + elbowY) / 2, elbowZ / 2],
+    foreCenter: [(elbowY + handY) / 2, (elbowZ + handZ) / 2],
+    upperPitch: -shoulderSwing,
+    forePitch: Math.PI - forearmRise,
+  };
+}
+
+/** Arms hang straight down when the operator is walking. */
+const RESTING_ARM = solveArm(0, Math.PI);
+
+function serviceArm(scanReach: number): ArmPose {
+  return solveArm(
+    SERVICE_SHOULDER_SWING,
+    SERVICE_FOREARM_BASE + SERVICE_FOREARM_RANGE * scanReach,
+  );
+}
+
+/**
+ * Per-part counting transform. The scanner hand rises to chest height with the
+ * elbow bent; the support arm stays close to the body. Every forward offset is
+ * bounded by SERVICE_FORWARD_REACH_LIMIT so nothing enters the racking.
  */
 function countingPartTransform(
   part: WarehouseWorkerVisualPart,
   gesture: WarehouseCountingGesture,
 ): PartTransform {
-  const { armLift, supportSwing, headDip } = gesture;
-  const headOffset: readonly [number, number, number] = [0, -0.035 * headDip, 0.055 * headDip];
+  const { scanReach, supportSwing, headDip } = gesture;
+  const scanning = serviceArm(scanReach);
+  const support = solveArm(supportSwing * 0.5, Math.PI - supportSwing * 0.8);
+  const headOffset: readonly [number, number, number] = [0, -0.03 * headDip, 0.04 * headDip];
 
   switch (part.id) {
-    case "right-arm":
+    case "right-upper-arm":
       return {
-        position: swungFromShoulder(ARM_X, ARM_CENTER_REACH, armLift),
-        rotation: [-armLift, 0, 0.12],
+        position: [ARM_X, scanning.upperCenter[0], scanning.upperCenter[1]],
+        rotation: [scanning.upperPitch, 0, 0.1],
+      };
+    case "right-forearm":
+      return {
+        position: [ARM_X, scanning.foreCenter[0], scanning.foreCenter[1]],
+        rotation: [scanning.forePitch, 0, 0],
       };
     case "right-hand":
-      return { position: swungFromShoulder(HAND_X, HAND_REACH, armLift), rotation: part.rotation };
-    case "scanner":
+      return { position: [HAND_X, scanning.hand[0], scanning.hand[1]], rotation: part.rotation };
+    case "scanner-body":
       return {
-        position: swungFromShoulder(SCANNER_X, SCANNER_REACH, armLift, 0.05),
-        rotation: [-(armLift + 0.35), 0, 0.05],
+        position: [HAND_X, scanning.hand[0] - 0.01, scanning.hand[1] + 0.03],
+        rotation: [-0.5, 0, 0],
       };
-    case "left-arm":
+    case "scanner-head":
       return {
-        position: swungFromShoulder(-ARM_X, ARM_CENTER_REACH, supportSwing),
-        rotation: [-supportSwing, 0, -0.12],
+        position: [HAND_X, scanning.hand[0] + 0.07, scanning.hand[1] + 0.035],
+        rotation: [-0.5, 0, 0],
+      };
+    case "left-upper-arm":
+      return {
+        position: [-ARM_X, support.upperCenter[0], support.upperCenter[1]],
+        rotation: [support.upperPitch, 0, -0.1],
+      };
+    case "left-forearm":
+      return {
+        position: [-ARM_X, support.foreCenter[0], support.foreCenter[1]],
+        rotation: [support.forePitch, 0, 0],
       };
     case "left-hand":
-      return {
-        position: swungFromShoulder(-HAND_X, HAND_REACH, supportSwing),
-        rotation: part.rotation,
-      };
+      return { position: [-HAND_X, support.hand[0], support.hand[1]], rotation: part.rotation };
     case "head":
     case "hard-hat":
     case "hard-hat-brim":
@@ -266,6 +330,17 @@ function countingPartTransform(
   }
 }
 
+/**
+ * Hard guarantee rather than a tuned number: after the pose and the upper-body
+ * twist are applied, nothing may sit further forward than the reach limit, so
+ * no gesture can ever push a hand or the scanner into the rack face.
+ */
+function clampForwardReach(
+  [x, y, z]: readonly [number, number, number],
+): readonly [number, number, number] {
+  return [x, y, Math.min(z, SERVICE_FORWARD_REACH_LIMIT)];
+}
+
 function applyCountingGesture(
   part: WarehouseWorkerVisualPart,
   gesture: WarehouseCountingGesture,
@@ -275,7 +350,7 @@ function applyCountingGesture(
   const posed = countingPartTransform(part, gesture);
   return {
     ...part,
-    position: rotateAboutY(posed.position, gesture.torsoTwist),
+    position: clampForwardReach(rotateAboutY(posed.position, gesture.torsoTwist)),
     rotation: [posed.rotation[0], posed.rotation[1] + gesture.torsoTwist, posed.rotation[2]],
   };
 }
@@ -301,30 +376,77 @@ export function createWarehouseWorkerVisual(
       height: worker.bodyHeight,
     },
     {
-      ...basePart("vest-panel", "safety", identityColor, [0, 1.16, 0.175]),
-      primitive: "box",
-      size: [0.26, 0.3, 0.03],
+      // A hi-vis vest worn over the uniform, not a coloured torso.
+      ...basePart("vest", "safety", WAREHOUSE_WORKER_COLORS.hiVis, [0, 1.19, 0]),
+      primitive: "cylinder",
+      topRadius: 0.185,
+      bottomRadius: 0.208,
+      height: 0.34,
     },
     {
-      ...basePart("left-arm", "workwear", WAREHOUSE_WORKER_COLORS.uniform, [-0.235, 1.19, 0], [0, 0, -0.12]),
+      ...basePart(
+        "left-upper-arm",
+        "workwear",
+        WAREHOUSE_WORKER_COLORS.uniform,
+        [-ARM_X, RESTING_ARM.upperCenter[0], RESTING_ARM.upperCenter[1]],
+        [RESTING_ARM.upperPitch, 0, -0.1],
+      ),
       primitive: "box",
-      size: [0.1, 0.52, 0.12],
+      size: [0.095, UPPER_ARM_LENGTH, 0.115],
     },
     {
-      ...basePart("right-arm", "workwear", WAREHOUSE_WORKER_COLORS.uniform, [0.235, 1.19, 0], [0, 0, 0.12]),
+      ...basePart(
+        "right-upper-arm",
+        "workwear",
+        WAREHOUSE_WORKER_COLORS.uniform,
+        [ARM_X, RESTING_ARM.upperCenter[0], RESTING_ARM.upperCenter[1]],
+        [RESTING_ARM.upperPitch, 0, 0.1],
+      ),
       primitive: "box",
-      size: [0.1, 0.52, 0.12],
+      size: [0.095, UPPER_ARM_LENGTH, 0.115],
     },
     {
-      ...basePart("left-hand", "skin", WAREHOUSE_WORKER_COLORS.skin, [-0.255, 0.9, 0]),
+      ...basePart(
+        "left-forearm",
+        "workwear",
+        WAREHOUSE_WORKER_COLORS.uniform,
+        [-ARM_X, RESTING_ARM.foreCenter[0], RESTING_ARM.foreCenter[1]],
+        [RESTING_ARM.forePitch, 0, 0],
+      ),
+      primitive: "box",
+      size: [0.088, FOREARM_LENGTH, 0.105],
+    },
+    {
+      ...basePart(
+        "right-forearm",
+        "workwear",
+        WAREHOUSE_WORKER_COLORS.uniform,
+        [ARM_X, RESTING_ARM.foreCenter[0], RESTING_ARM.foreCenter[1]],
+        [RESTING_ARM.forePitch, 0, 0],
+      ),
+      primitive: "box",
+      size: [0.088, FOREARM_LENGTH, 0.105],
+    },
+    {
+      ...basePart(
+        "left-hand",
+        "skin",
+        WAREHOUSE_WORKER_COLORS.skin,
+        [-HAND_X, RESTING_ARM.hand[0], RESTING_ARM.hand[1]],
+      ),
       primitive: "sphere",
-      radius: 0.062,
+      radius: 0.058,
       scale: [1, 1, 1],
     },
     {
-      ...basePart("right-hand", "skin", WAREHOUSE_WORKER_COLORS.skin, [0.255, 0.9, 0]),
+      ...basePart(
+        "right-hand",
+        "skin",
+        WAREHOUSE_WORKER_COLORS.skin,
+        [HAND_X, RESTING_ARM.hand[0], RESTING_ARM.hand[1]],
+      ),
       primitive: "sphere",
-      radius: 0.062,
+      radius: 0.058,
       scale: [1, 1, 1],
     },
     {
@@ -366,9 +488,27 @@ export function createWarehouseWorkerVisual(
       size: [0.3, 0.022, 0.2],
     },
     {
-      ...basePart("scanner", "equipment", WAREHOUSE_WORKER_COLORS.equipment, [0.265, 0.94, 0.075], [-0.25, 0, 0.06]),
+      // Handheld scanner: grip body plus a distinct scan head.
+      ...basePart(
+        "scanner-body",
+        "equipment",
+        WAREHOUSE_WORKER_COLORS.equipment,
+        [HAND_X, RESTING_ARM.hand[0] - 0.04, RESTING_ARM.hand[1] + 0.05],
+        [-0.35, 0, 0],
+      ),
       primitive: "box",
-      size: [0.075, 0.16, 0.055],
+      size: [0.055, 0.145, 0.05],
+    },
+    {
+      ...basePart(
+        "scanner-head",
+        "equipment",
+        WAREHOUSE_WORKER_COLORS.scannerHead,
+        [HAND_X, RESTING_ARM.hand[0] + 0.04, RESTING_ARM.hand[1] + 0.08],
+        [-0.35, 0, 0],
+      ),
+      primitive: "box",
+      size: [0.072, 0.05, 0.075],
     },
   ];
 
@@ -380,45 +520,58 @@ export function createWarehouseWorkerVisual(
   };
 }
 
+export interface WarehouseScanWave {
+  readonly index: number;
+  /** Arc radius from the scan head, in figure-local world units. */
+  readonly radius: number;
+  readonly opacity: number;
+}
+
 export interface WarehouseWorkerScanCue {
-  /** Figure-local origin at the scanner head. */
+  /** Figure-local origin at the scan head. */
   readonly origin: readonly [number, number, number];
   /** Unit direction the scan head points, in figure-local space. */
   readonly direction: readonly [number, number, number];
-  readonly length: number;
-  /** 0..1 brightness, peaking when the operator reaches into the bay. */
+  readonly waves: readonly WarehouseScanWave[];
+  /** 0..1 brightness, peaking when the operator lines the scanner up. */
   readonly intensity: number;
 }
 
-const SCAN_HEAD_TILT = 0.35;
+export const SCAN_WAVE_COUNT = 3;
+export const SCAN_WAVE_MIN_RADIUS = 0.06;
+/** Reaches the rack face without pushing arcs deep into shelving. */
+export const SCAN_WAVE_MAX_RADIUS = 0.17;
 
 /**
- * A short scan indicator from the scanner head toward the bay face the operator
- * is counting. It exists only while a counting gesture does -- i.e. only during
- * service -- and its brightness rides the same gesture, so it needs no timer and
- * freezes, seeks, and scales with playback exactly like the pose does.
+ * A short burst of expanding arcs from the scan head toward the bay being
+ * counted -- an RFID/barcode read, not a beam. It exists only while a counting
+ * gesture does, and every wave phase is a pure function of the same service
+ * elapsed time, so it freezes on pause and lands correctly on any seek.
  */
 export function createWarehouseWorkerScanCue(
   gesture: WarehouseCountingGesture | null,
 ): WarehouseWorkerScanCue | null {
   if (!gesture) return null;
 
-  const headAngle = gesture.armLift + SCAN_HEAD_TILT;
-  const forward: readonly [number, number, number] = [0, -Math.cos(headAngle), Math.sin(headAngle)];
-  const direction = rotateAboutY(forward, gesture.torsoTwist);
-  const scanner = rotateAboutY(
-    swungFromShoulder(SCANNER_X, SCANNER_REACH, gesture.armLift, 0.05),
+  const scanning = serviceArm(gesture.scanReach);
+  const direction = rotateAboutY([0, 0, 1], gesture.torsoTwist);
+  const head = clampForwardReach(rotateAboutY(
+    [HAND_X, scanning.hand[0] + 0.07, scanning.hand[1] + 0.035],
     gesture.torsoTwist,
-  );
+  ));
+  const intensity = 0.35 + 0.5 * gesture.scanReach;
 
   return {
-    origin: [
-      scanner[0] + direction[0] * 0.11,
-      scanner[1] + direction[1] * 0.11,
-      scanner[2] + direction[2] * 0.11,
-    ],
+    origin: head,
     direction,
-    length: 0.42 + 0.18 * gesture.scanReach,
-    intensity: 0.3 + 0.55 * gesture.scanReach,
+    intensity,
+    waves: Array.from({ length: SCAN_WAVE_COUNT }, (_unused, index) => {
+      const phase = (gesture.cycle + index / SCAN_WAVE_COUNT) % 1;
+      return {
+        index,
+        radius: SCAN_WAVE_MIN_RADIUS + (SCAN_WAVE_MAX_RADIUS - SCAN_WAVE_MIN_RADIUS) * phase,
+        opacity: Math.max(0, 1 - phase) * intensity,
+      };
+    }),
   };
 }

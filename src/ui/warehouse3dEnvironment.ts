@@ -21,7 +21,9 @@ export type WarehouseEnvironmentBoxKind =
   | "rack-shelf"
   | "pallet"
   | "carton"
+  | "rack-base"
   | "rack-guard"
+  | "rack-asset"
   | "aisle-sign"
   | "aisle-zone"
   | "aisle-marking"
@@ -50,6 +52,12 @@ export interface WarehouseRackVisual {
   readonly overviewMembers: readonly WarehouseEnvironmentBoxVisual[];
   readonly closeMembers: readonly WarehouseEnvironmentBoxVisual[];
   readonly shelfLevels: readonly number[];
+  /**
+   * One box per bay of this run, sized from the existing footprint. An imported
+   * rack asset is normalized into these boxes; they never widen the footprint,
+   * so asset use cannot change clearance the layout already guarantees.
+   */
+  readonly assetBays: readonly WarehouseEnvironmentBoxVisual[];
 }
 
 export interface WarehousePropVisual extends WarehouseEnvironmentBoxVisual {
@@ -85,6 +93,8 @@ export interface Warehouse3DEnvironment {
 export interface WarehouseEnvironmentRenderSet {
   readonly rackMembers: readonly WarehouseEnvironmentBoxVisual[];
   readonly storageProps: readonly WarehousePropVisual[];
+  /** Placement boxes for the imported rack asset; unused on the procedural path. */
+  readonly rackAssetBays: readonly WarehouseEnvironmentBoxVisual[];
 }
 
 /** Renderer-only decorative dimensions; none represent measured warehouse engineering data. */
@@ -258,6 +268,33 @@ function buildRackVisual(
     });
   }
 
+  // Base plates: real racking is bolted to the slab, not floating on it.
+  const plateHalf = postSize * 0.8;
+  for (const [x, xInset] of [[leftX, postSize * 0.3], [rightX, -postSize * 0.3]] as const) {
+    for (const [z, zInset] of [
+      [footprint.minZ + postSize / 2, postSize * 0.3],
+      [footprint.maxZ - postSize / 2, -postSize * 0.3],
+    ] as const) {
+      overviewMembers.push(box(
+        `${id}-base-${overviewMembers.length}`,
+        "rack-base",
+        [x + xInset, 0.012, z + zInset],
+        [plateHalf * 2, 0.024, plateHalf * 2],
+      ));
+    }
+  }
+
+  // One mid-height beam stays visible at distance so runs read as multi-level.
+  const midLevel = shelfLevels[Math.floor(shelfLevels.length / 2)];
+  for (const x of [leftX, rightX]) {
+    overviewMembers.push(box(
+      `${id}-mid-rail-${x === leftX ? "left" : "right"}`,
+      "rack-beam",
+      [x, midLevel, centerZ],
+      [postSize, beamHeight, depth],
+    ));
+  }
+
   // Rack-end protectors: a real run is guarded where trucks turn into the aisle.
   const guardHeight = WAREHOUSE_3D_ENVIRONMENT.guardHeight;
   for (const z of [footprint.minZ + postSize, footprint.maxZ - postSize]) {
@@ -269,8 +306,15 @@ function buildRackVisual(
     ));
   }
 
+  const assetBays = Array.from({ length: bayCount }, (_, bayIndex) => box(
+    `${id}-asset-${bayIndex}`,
+    "rack-asset",
+    [centerX, rackHeight / 2, footprint.minZ + (bayIndex + 0.5) * bayDepth],
+    [width, rackHeight, bayDepth],
+  ));
+
   return {
-    rack: { id, footprint, overviewMembers, closeMembers, shelfLevels },
+    rack: { id, footprint, overviewMembers, closeMembers, shelfLevels, assetBays },
     props,
   };
 }
@@ -490,6 +534,7 @@ export function getWarehouseEnvironmentRenderSet(
       : rack.overviewMembers),
     storageProps: environment.props.filter((prop) =>
       detailLevel === "close" || prop.minimumDetail === "overview"),
+    rackAssetBays: environment.racks.flatMap((rack) => rack.assetBays),
   };
 }
 

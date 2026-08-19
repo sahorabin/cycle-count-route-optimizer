@@ -97,6 +97,11 @@ describe("warehouse3dEnvironment", () => {
       expect(shelves.length).toBeGreaterThan(0);
       expect(uprights.every((member) => member.size[1] === WAREHOUSE_3D_ENVIRONMENT.rackHeight))
         .toBe(true);
+      // Frames are bolted down: thin base plates sit on the slab under each post.
+      const bases = rack.overviewMembers.filter((member) => member.kind === "rack-base");
+      expect(bases).toHaveLength(4);
+      expect(bases.every((member) => member.size[1] < 0.05)).toBe(true);
+      expect(bases.every((member) => member.center[1] > 0)).toBe(true);
       [...uprights, ...beams, ...shelves].forEach((member) => {
         expectBoxInsideFootprint(member, rack.footprint);
       });
@@ -133,6 +138,49 @@ describe("warehouse3dEnvironment", () => {
       expect(prop.center[1]).toBeGreaterThan(0);
       expect(prop.center[1]).toBeLessThan(WAREHOUSE_3D_ENVIRONMENT.shelfLevels[0]);
     }
+  });
+
+  test("fits imported rack bays exactly inside the existing footprint", () => {
+    const transform = createWarehouse3DTransform(largeWarehouse);
+    const environment = buildWarehouse3DEnvironment(largeWarehouse, transform);
+
+    for (const rack of environment.racks) {
+      expect(rack.assetBays.length).toBeGreaterThanOrEqual(
+        WAREHOUSE_3D_ENVIRONMENT.minimumBayCount,
+      );
+
+      const sorted = [...rack.assetBays].sort((a, b) => a.center[2] - b.center[2]);
+      sorted.forEach((bay, index) => {
+        // An imported asset may never widen the run: the layout is the truth.
+        expectBoxInsideFootprint(bay, rack.footprint);
+        expect(bay.kind).toBe("rack-asset");
+        expect(bay.size[0]).toBeCloseTo(rack.footprint.maxX - rack.footprint.minX, 9);
+        expect(bay.size[1]).toBeCloseTo(WAREHOUSE_3D_ENVIRONMENT.rackHeight, 9);
+        expect(bay.center[1]).toBeCloseTo(WAREHOUSE_3D_ENVIRONMENT.rackHeight / 2, 9);
+        // Bays tile the run end to end with no gap and no overlap.
+        const expectedStart = rack.footprint.minZ + index * bay.size[2];
+        expect(bay.center[2] - bay.size[2] / 2).toBeCloseTo(expectedStart, 9);
+      });
+
+      const covered = sorted.reduce((total, bay) => total + bay.size[2], 0);
+      expect(covered).toBeCloseTo(rack.footprint.maxZ - rack.footprint.minZ, 9);
+    }
+  });
+
+  test("places imported rack bays deterministically and independently of detail level", () => {
+    const transform = createWarehouse3DTransform(largeWarehouse);
+    const first = buildWarehouse3DEnvironment(largeWarehouse, transform);
+    const second = buildWarehouse3DEnvironment(largeWarehouse, transform);
+
+    const bays = (environment: typeof first, detail: "overview" | "close") =>
+      getWarehouseEnvironmentRenderSet(environment, detail).rackAssetBays;
+
+    // Compare fairness: both route scenes build this from the same warehouse.
+    expect(bays(second, "close")).toEqual(bays(first, "close"));
+    expect(bays(first, "overview")).toEqual(bays(first, "close"));
+    expect(bays(first, "close")).toHaveLength(
+      first.racks.reduce((total, rack) => total + rack.assetBays.length, 0),
+    );
   });
 
   test("does not mutate warehouse or transform inputs", () => {

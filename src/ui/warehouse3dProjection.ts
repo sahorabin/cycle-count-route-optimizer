@@ -5,10 +5,11 @@ import { buildCoordinateLookup, type Point } from "./svgPoints";
 /**
  * How far along the spur, from its aisle node toward the bin, the operator is
  * drawn. Bins sit inside their rack run, so rendering a body at the bin point
- * would put it inside shelving; standing part-way keeps the operator in the
- * walkable aisle, beside the rack, facing the bay being counted.
+ * would put it inside shelving. Standing close to the aisle centre keeps the
+ * whole figure -- including a raised scanner -- clear of the rack face, and the
+ * scan arcs cover the remaining gap.
  */
-export const OPERATOR_AISLE_STANDOFF = 0.5;
+export const OPERATOR_AISLE_STANDOFF = 0.18;
 
 export interface Warehouse3DTransform {
   readonly minX: number;

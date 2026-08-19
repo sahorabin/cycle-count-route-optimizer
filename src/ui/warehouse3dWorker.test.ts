@@ -10,6 +10,10 @@ import {
   createWarehouseWorkerPose,
   createWarehouseWorkerScanCue,
   createWarehouseWorkerVisual,
+  SCAN_WAVE_COUNT,
+  SCAN_WAVE_MAX_RADIUS,
+  SCAN_WAVE_MIN_RADIUS,
+  SERVICE_FORWARD_REACH_LIMIT,
   getWarehouseWorkerFacingYaw,
   getWarehouseWorkerFigureScale,
   WAREHOUSE_WORKER_DEPTH_POLICY,
@@ -114,17 +118,18 @@ describe("warehouse3dWorker", () => {
     expect(worker.parts.map(({ id }) => id)).toEqual(recommended.parts.map(({ id }) => id));
     expect(worker.parts.some(({ id }) => id === "head")).toBe(true);
     expect(worker.parts.some(({ id }) => id === "torso")).toBe(true);
-    expect(worker.parts.filter(({ id }) => id.endsWith("arm"))).toHaveLength(2);
+    expect(worker.parts.filter(({ id }) => id.endsWith("arm"))).toHaveLength(4);
     expect(worker.parts.filter(({ id }) => id.endsWith("leg"))).toHaveLength(2);
     expect(worker.parts.filter(({ id }) => id.endsWith("boot"))).toHaveLength(2);
-    expect(worker.parts.some(({ id }) => id === "scanner")).toBe(true);
+    expect(worker.parts.some(({ id }) => id === "scanner-body")).toBe(true);
+    expect(worker.parts.some(({ id }) => id === "scanner-head")).toBe(true);
   });
 
   test("generates only finite renderer geometry and rotations", () => {
     const visual = createWarehouseWorkerVisual("#2563eb");
     const numbers = visualNumbers(visual);
 
-    expect(visual.parts).toHaveLength(14);
+    expect(visual.parts).toHaveLength(17);
     expect(numbers.length).toBeGreaterThan(0);
     expect(numbers.every(Number.isFinite)).toBe(true);
   });
@@ -142,7 +147,7 @@ describe("warehouse worker counting pose", () => {
 
   test("travel keeps the existing worker pose untouched", () => {
     expect(createWarehouseWorkerVisual("#2563eb", null)).toEqual(travelVisual);
-    expect(travelVisual.parts).toHaveLength(14);
+    expect(travelVisual.parts).toHaveLength(17);
   });
 
   test("service re-poses the existing primitives without adding or renaming parts", () => {
@@ -153,24 +158,23 @@ describe("warehouse worker counting pose", () => {
   });
 
   test("raises the scanner arm and carries the scanner forward while counting", () => {
-    const travelScanner = partById(travelVisual, "scanner");
-    const countingScanner = partById(countingVisual, "scanner");
-    const travelArm = partById(travelVisual, "right-arm");
-    const countingArm = partById(countingVisual, "right-arm");
+    const travelScanner = partById(travelVisual, "scanner-head");
+    const countingScanner = partById(countingVisual, "scanner-head");
+    const travelArm = partById(travelVisual, "right-forearm");
+    const countingArm = partById(countingVisual, "right-forearm");
 
     expect(countingScanner.position[1]).toBeGreaterThan(travelScanner.position[1]);
     expect(countingScanner.position[2]).toBeGreaterThan(travelScanner.position[2]);
     expect(countingArm.position[2]).toBeGreaterThan(travelArm.position[2]);
-    expect(countingArm.rotation[0]).toBeLessThan(travelArm.rotation[0]);
+    expect(countingArm.position[1]).toBeGreaterThan(travelArm.position[1]);
   });
 
   test("gives the support arm a smaller gesture than the scanner arm", () => {
-    const scannerArm = partById(countingVisual, "right-arm");
-    const supportArm = partById(countingVisual, "left-arm");
+    const scannerArm = partById(countingVisual, "right-forearm");
+    const supportArm = partById(countingVisual, "left-forearm");
 
-    expect(Math.abs(supportArm.rotation[0])).toBeGreaterThan(0);
-    expect(Math.abs(supportArm.rotation[0])).toBeLessThan(Math.abs(scannerArm.rotation[0]));
     expect(supportArm.position[2]).toBeLessThan(scannerArm.position[2]);
+    expect(supportArm.position[1]).toBeLessThan(scannerArm.position[1]);
   });
 
   test("keeps the feet planted and the worker root position unchanged", () => {
@@ -192,8 +196,8 @@ describe("warehouse worker counting pose", () => {
     const later = createWarehouseWorkerVisual("#2563eb", createWarehouseCountingGesture(4.1));
 
     expect(repeat).toEqual(countingVisual);
-    expect(partById(later, "scanner").position).not.toEqual(
-      partById(countingVisual, "scanner").position,
+    expect(partById(later, "scanner-head").position).not.toEqual(
+      partById(countingVisual, "scanner-head").position,
     );
   });
 
@@ -300,44 +304,63 @@ describe("warehouse worker scan cue", () => {
     expect(createWarehouseWorkerScanCue(gesture)).not.toBeNull();
   });
 
-  test("starts at the scanner head and points away from the operator", () => {
+  test("emits expanding arcs from the scan head toward the bay", () => {
     const cue = createWarehouseWorkerScanCue(gesture)!;
-    const scanner = createWarehouseWorkerVisual("#2563eb", gesture).parts
-      .find(({ id }) => id === "scanner")!;
-    const distanceToScanner = Math.hypot(
-      cue.origin[0] - scanner.position[0],
-      cue.origin[1] - scanner.position[1],
-      cue.origin[2] - scanner.position[2],
+    const head = createWarehouseWorkerVisual("#2f5d9e", gesture).parts
+      .find(({ id }) => id === "scanner-head")!;
+    const distanceToHead = Math.hypot(
+      cue.origin[0] - head.position[0],
+      cue.origin[1] - head.position[1],
+      cue.origin[2] - head.position[2],
     );
 
-    expect(distanceToScanner).toBeLessThan(0.25);
-    // Forward is +Z in figure space, which the pose already aims at the location.
-    expect(cue.direction[2]).toBeGreaterThan(0.5);
+    expect(distanceToHead).toBeLessThan(0.06);
+    // Forward is +Z in figure space, which the pose already aims at the rack.
+    expect(cue.direction[2]).toBeGreaterThan(0.9);
     expect(Math.hypot(...cue.direction)).toBeCloseTo(1);
-    expect(cue.length).toBeGreaterThan(0.4);
-    expect(cue.length).toBeLessThan(1);
+    expect(cue.waves).toHaveLength(SCAN_WAVE_COUNT);
   });
 
-  test("is deterministic and bounded across the scan cycle", () => {
+  test("spaces the waves across one scan cycle and fades them as they expand", () => {
+    const cue = createWarehouseWorkerScanCue(gesture)!;
+
+    for (const wave of cue.waves) {
+      expect(wave.radius).toBeGreaterThanOrEqual(SCAN_WAVE_MIN_RADIUS);
+      expect(wave.radius).toBeLessThanOrEqual(SCAN_WAVE_MAX_RADIUS);
+      expect(wave.opacity).toBeGreaterThanOrEqual(0);
+      expect(wave.opacity).toBeLessThanOrEqual(1);
+    }
+    // Distinct phases, so the burst reads as motion rather than one ring.
+    expect(new Set(cue.waves.map(({ radius }) => radius.toFixed(4))).size)
+      .toBe(SCAN_WAVE_COUNT);
+    const widest = [...cue.waves].sort((a, b) => b.radius - a.radius)[0];
+    const tightest = [...cue.waves].sort((a, b) => a.radius - b.radius)[0];
+    expect(widest.opacity).toBeLessThan(tightest.opacity);
+  });
+
+  test("is a pure function of service elapsed time", () => {
     expect(createWarehouseWorkerScanCue(gesture)).toEqual(createWarehouseWorkerScanCue(gesture));
+    expect(createWarehouseWorkerScanCue(createWarehouseCountingGesture(3.4)))
+      .not.toEqual(createWarehouseWorkerScanCue(gesture));
 
     for (const elapsed of [0, 0.7, 1.4, 2.1, Number.NaN, -5]) {
       const cue = createWarehouseWorkerScanCue(createWarehouseCountingGesture(elapsed))!;
-      expect([...cue.origin, ...cue.direction, cue.length, cue.intensity].every(Number.isFinite))
-        .toBe(true);
-      expect(cue.intensity).toBeGreaterThan(0);
-      expect(cue.intensity).toBeLessThanOrEqual(1);
+      const numbers = [
+        ...cue.origin,
+        ...cue.direction,
+        cue.intensity,
+        ...cue.waves.flatMap((wave) => [wave.radius, wave.opacity]),
+      ];
+      expect(numbers.every(Number.isFinite)).toBe(true);
     }
   });
 
-  test("brightens and extends as the operator reaches into the bay", () => {
-    const resting = createWarehouseWorkerScanCue(createWarehouseCountingGesture(0))!;
-    const reaching = createWarehouseWorkerScanCue(
-      createWarehouseCountingGesture(1 / (2 * 0.45)),
-    )!;
-
-    expect(reaching.intensity).toBeGreaterThan(resting.intensity);
-    expect(reaching.length).toBeGreaterThan(resting.length);
+  test("stays inside the operator's forward reach limit", () => {
+    for (const elapsed of [0, 0.5, 1.1, 1.7, 2.3]) {
+      const cue = createWarehouseWorkerScanCue(createWarehouseCountingGesture(elapsed))!;
+      // The arcs may reach the rack face; the hardware never travels into it.
+      expect(cue.origin[2]).toBeLessThanOrEqual(SERVICE_FORWARD_REACH_LIMIT);
+    }
   });
 });
 
@@ -375,7 +398,7 @@ describe("warehouse worker proportions", () => {
   });
 
   test("keeps shoulders narrow relative to height", () => {
-    const arm = part("right-arm");
+    const arm = part("right-upper-arm");
     const hat = part("hard-hat");
     if (arm.primitive !== "box" || hat.primitive !== "cylinder") {
       throw new Error("Unexpected worker primitives");
@@ -393,7 +416,10 @@ describe("warehouse worker proportions", () => {
       .filter((candidate, index) => candidate.color !== recommended.parts[index].color)
       .map(({ id }) => id);
 
-    expect(identityParts).toEqual(["vest-panel", "hard-hat", "hard-hat-brim"]);
+    // Only the hard hat carries route identity; the vest is real hi-vis PPE.
+    expect(identityParts).toEqual(["hard-hat", "hard-hat-brim"]);
+    expect(worker.parts.find(({ id }) => id === "vest")?.color)
+      .toBe(WAREHOUSE_WORKER_COLORS.hiVis);
     // Trousers, torso, and boots are workwear, not identity paint.
     expect(worker.parts.find(({ id }) => id === "torso")?.color)
       .toBe(WAREHOUSE_WORKER_COLORS.uniform);

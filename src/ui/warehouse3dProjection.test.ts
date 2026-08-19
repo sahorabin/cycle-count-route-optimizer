@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { largeWarehouse } from "../data/largeWarehouse";
 import { buildWarehouse3DEnvironment } from "./warehouse3dEnvironment";
+import { createWarehouseCountingGesture } from "./warehouse3dServiceVisual";
+import {
+  createWarehouseWorkerVisual,
+  SERVICE_FORWARD_REACH_LIMIT,
+} from "./warehouse3dWorker";
 import { buildRouteTimeline } from "../domain/routeTimeline";
 import type { WarehouseGraph } from "../domain/types";
 import { getSimulationSnapshotAtTime } from "../simulation/simulationSnapshot";
@@ -290,5 +295,72 @@ describe("operator standing positions", () => {
     });
 
     expect(binsInsideRacks.length).toBe(largeWarehouse.locations.length);
+  });
+});
+
+describe("service pose clearance", () => {
+  /** Clear distance, in world units, from the operator to the rack face. */
+  function aisleClearance() {
+    const transform = createWarehouse3DTransform(largeWarehouse);
+    const environment = buildWarehouse3DEnvironment(largeWarehouse, transform);
+    const lookup = buildOperatorCoordinateLookup(largeWarehouse);
+
+    return Math.min(...largeWarehouse.locations.map((location) => {
+      const stand = projectDisplayPointToWarehouse3D(lookup.get(location.id)!, transform);
+      const bin = projectDisplayPointToWarehouse3D(location, transform);
+      // The rack run the bin belongs to; its near edge is the face the
+      // operator scans across.
+      const run = environment.racks.find((rack) =>
+        bin.x > rack.footprint.minX && bin.x < rack.footprint.maxX
+        && bin.z > rack.footprint.minZ && bin.z < rack.footprint.maxZ);
+      if (!run) throw new Error(`No rack run contains ${location.id}`);
+      const faceX = stand.x < run.footprint.minX ? run.footprint.minX : run.footprint.maxX;
+      return Math.abs(faceX - stand.x);
+    }));
+  }
+
+  test("keeps the whole service pose short of the rack face", () => {
+    const clearance = aisleClearance();
+
+    // Every posed part is clamped to this reach, so nothing can cross the face.
+    expect(SERVICE_FORWARD_REACH_LIMIT).toBeLessThan(clearance);
+    // A real margin, not a rounding-error escape.
+    expect(clearance - SERVICE_FORWARD_REACH_LIMIT).toBeGreaterThan(0.03);
+  });
+
+  test("never poses a part beyond the reach limit at any point in the scan cycle", () => {
+    const samples = [0, 0.4, 0.9, 1.3, 1.8, 2.2, 2.9, 3.6];
+
+    for (const elapsed of samples) {
+      const visual = createWarehouseWorkerVisual(
+        "#2f6fc4",
+        createWarehouseCountingGesture(elapsed),
+      );
+      for (const part of visual.parts) {
+        expect({ elapsed, part: part.id, withinReach: part.position[2] <= SERVICE_FORWARD_REACH_LIMIT })
+          .toEqual({ elapsed, part: part.id, withinReach: true });
+      }
+    }
+  });
+
+  test("keeps the standing figure narrower than the aisle it stands in", () => {
+    const clearance = aisleClearance();
+    const travelVisual = createWarehouseWorkerVisual("#2f6fc4");
+    const deepest = Math.max(...travelVisual.parts.map((part) => part.position[2]
+      + (part.primitive === "box" ? part.size[2] / 2 : 0.2)));
+
+    // Body depth, not just joint centres, stays inside the walkable clearance.
+    expect(deepest).toBeLessThan(clearance);
+  });
+
+  test("does not move the operational destination", () => {
+    const lookup = buildOperatorCoordinateLookup(largeWarehouse);
+    const before = JSON.stringify(largeWarehouse.locations);
+
+    for (const location of largeWarehouse.locations) {
+      expect(lookup.get(location.id)).not.toEqual({ x: location.x, y: location.y });
+    }
+    // The renderer standing point is derived, never written back.
+    expect(JSON.stringify(largeWarehouse.locations)).toBe(before);
   });
 });

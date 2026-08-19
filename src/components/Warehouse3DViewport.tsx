@@ -1,10 +1,12 @@
 import { Canvas, useThree } from "@react-three/fiber";
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { InstancedMesh, Object3D, OrthographicCamera, Quaternion, Vector3 } from "three";
+import type { BufferGeometry, Material } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { NodeId, RouteTimeline, WarehouseGraph } from "../domain/types";
 import type { SimulationSnapshot } from "../simulation/types";
 import { buildCoordinateLookup, type Point } from "../ui/svgPoints";
+import { useWarehouseAsset } from "../ui/warehouse3dAssetLoader";
 import {
   createWarehouseActiveServiceVisual,
   createWarehouseServiceCompletionVisual,
@@ -58,7 +60,6 @@ import {
   createWarehouseWorkerScanCue,
   createWarehouseWorkerVisual,
   getWarehouseWorkerFigureScale,
-  WAREHOUSE_WORKER_COLORS,
   WAREHOUSE_WORKER_DEPTH_POLICY,
   type WarehouseWorkerScanCue,
   type WarehouseWorkerVisualPart,
@@ -80,9 +81,10 @@ interface Warehouse3DViewportProps {
 }
 
 /** Deeper, lower-chroma identity hues: still unmistakable, no longer neon. */
+/** Deeper than the shell tokens: these must hold their own on bright concrete. */
 const ROUTE_COLORS: Record<ReplayRouteMode, string> = {
-  worker: "#5a92d8",
-  recommended: "#48b391",
+  worker: "#2f6fc4",
+  recommended: "#1c8f6d",
 };
 
 interface InteractiveWarehouseCameraProps {
@@ -267,17 +269,12 @@ interface InstancedEnvironmentBoxesProps {
   receiveShadow?: boolean;
 }
 
-function InstancedEnvironmentBoxes({
-  visuals,
-  color,
-  roughness = 0.9,
-  metalness = 0,
-  opacity = 1,
-  emissive,
-  emissiveIntensity = 0,
-  castShadow = false,
-  receiveShadow = false,
-}: InstancedEnvironmentBoxesProps) {
+/**
+ * Position + size of every visual written into one instance matrix buffer. Both
+ * the procedural boxes and the imported rack asset place through this, because
+ * the asset is normalized into the same unit-box convention.
+ */
+function useInstanceMatrices(visuals: readonly WarehouseEnvironmentBoxVisual[]) {
   const meshRef = useRef<InstancedMesh>(null);
   const { invalidate } = useThree();
 
@@ -295,6 +292,22 @@ function InstancedEnvironmentBoxes({
     mesh.computeBoundingSphere();
     invalidate();
   }, [invalidate, visuals]);
+
+  return meshRef;
+}
+
+function InstancedEnvironmentBoxes({
+  visuals,
+  color,
+  roughness = 0.9,
+  metalness = 0,
+  opacity = 1,
+  emissive,
+  emissiveIntensity = 0,
+  castShadow = false,
+  receiveShadow = false,
+}: InstancedEnvironmentBoxesProps) {
+  const meshRef = useInstanceMatrices(visuals);
 
   if (visuals.length === 0) return null;
 
@@ -317,6 +330,37 @@ function InstancedEnvironmentBoxes({
         emissiveIntensity={emissiveIntensity}
       />
     </instancedMesh>
+  );
+}
+
+/**
+ * One imported mesh, drawn once per rack bay from a single shared geometry and
+ * material. Repeated racking never costs a second load, parse, or draw call.
+ */
+function InstancedAssetMeshes({
+  visuals,
+  geometry,
+  material,
+  castShadow = false,
+  receiveShadow = false,
+}: {
+  visuals: readonly WarehouseEnvironmentBoxVisual[];
+  geometry: BufferGeometry;
+  material: Material;
+  castShadow?: boolean;
+  receiveShadow?: boolean;
+}) {
+  const meshRef = useInstanceMatrices(visuals);
+
+  if (visuals.length === 0) return null;
+
+  return (
+    <instancedMesh
+      ref={meshRef}
+      args={[geometry, material, visuals.length]}
+      castShadow={castShadow}
+      receiveShadow={receiveShadow}
+    />
   );
 }
 
@@ -392,32 +436,56 @@ const WarehouseRacks = memo(function WarehouseRacks({
     () => getWarehouseEnvironmentRenderSet(environment, detailLevel),
     [detailLevel, environment],
   );
+  const rackAsset = useWarehouseAsset("rack-run");
+  const { geometry, material } = rackAsset;
+  // The imported rack is the primary representation; the procedural frame is
+  // what the warehouse falls back to when the asset cannot load.
+  const importedRack = rackAsset.status === "ready" && geometry !== null && material !== null;
+
   const uprights = renderSet.rackMembers.filter((visual) => visual.kind === "rack-upright");
   const beams = renderSet.rackMembers.filter((visual) => visual.kind === "rack-beam");
   const shelves = renderSet.rackMembers.filter((visual) => visual.kind === "rack-shelf");
+  const bases = renderSet.rackMembers.filter((visual) => visual.kind === "rack-base");
   const guards = renderSet.rackMembers.filter((visual) => visual.kind === "rack-guard");
   const pallets = renderSet.storageProps.filter((visual) => visual.kind === "pallet");
   const cartons = renderSet.storageProps.filter((visual) => visual.kind === "carton");
 
   return (
     <>
-      <InstancedEnvironmentBoxes
-        visuals={uprights}
-        {...WAREHOUSE_3D_MATERIALS.rackUpright}
-        castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.rackUpright}
-        receiveShadow
-      />
-      <InstancedEnvironmentBoxes
-        visuals={beams}
-        {...WAREHOUSE_3D_MATERIALS.rackBeam}
-        castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.rackBeam}
-      />
-      <InstancedEnvironmentBoxes
-        visuals={shelves}
-        {...WAREHOUSE_3D_MATERIALS.rackShelf}
-        castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.rackShelf}
-        receiveShadow
-      />
+      {importedRack ? (
+        <InstancedAssetMeshes
+          visuals={renderSet.rackAssetBays}
+          geometry={geometry}
+          material={material}
+          castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.rackAsset}
+          receiveShadow
+        />
+      ) : (
+        <>
+          <InstancedEnvironmentBoxes
+            visuals={uprights}
+            {...WAREHOUSE_3D_MATERIALS.rackUpright}
+            castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.rackUpright}
+            receiveShadow
+          />
+          <InstancedEnvironmentBoxes
+            visuals={beams}
+            {...WAREHOUSE_3D_MATERIALS.rackBeam}
+            castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.rackBeam}
+          />
+          <InstancedEnvironmentBoxes
+            visuals={shelves}
+            {...WAREHOUSE_3D_MATERIALS.rackShelf}
+            castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.rackShelf}
+            receiveShadow
+          />
+          <InstancedEnvironmentBoxes
+            visuals={bases}
+            {...WAREHOUSE_3D_MATERIALS.rackUpright}
+            castShadow={WAREHOUSE_3D_MATERIALS.shadowCasters.rackUpright}
+          />
+        </>
+      )}
       <InstancedEnvironmentBoxes
         visuals={guards}
         {...WAREHOUSE_3D_MATERIALS.rackGuard}
@@ -905,48 +973,40 @@ function WorkerVisualPartMesh({ part }: { part: WarehouseWorkerVisualPart }) {
   );
 }
 
-/** A short scan indicator from the scanner head toward the bay being counted. */
+/** Expanding scan arcs from the scan head toward the bay being counted. */
 function WorkerScanCue({ cue }: { cue: WarehouseWorkerScanCue }) {
-  const { quaternion, midpoint, endpoint } = useMemo(() => {
-    const direction = new Vector3(...cue.direction).normalize();
-    const origin = new Vector3(...cue.origin);
-    return {
-      quaternion: new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), direction),
-      midpoint: origin.clone().add(direction.clone().multiplyScalar(cue.length / 2)),
-      endpoint: origin.clone().add(direction.clone().multiplyScalar(cue.length)),
-    };
-  }, [cue]);
+  const quaternion = useMemo(
+    () => new Quaternion().setFromUnitVectors(
+      new Vector3(0, 0, 1),
+      new Vector3(...cue.direction).normalize(),
+    ),
+    [cue],
+  );
   const policy = WAREHOUSE_WORKER_DEPTH_POLICY.locator;
 
   return (
-    <group>
-      <mesh
-        position={midpoint}
-        quaternion={quaternion}
-        renderOrder={policy.renderOrder}
-      >
-        <cylinderGeometry args={[0.009, 0.009, cue.length, 6]} />
-        <meshBasicMaterial
-          color={WAREHOUSE_WORKER_COLORS.safety}
-          transparent
-          opacity={0.22 + 0.34 * cue.intensity}
-          depthTest={policy.depthTest}
-          depthWrite={policy.depthWrite}
-        />
-      </mesh>
-      <mesh position={endpoint} renderOrder={policy.renderOrder}>
-        <sphereGeometry args={[0.035, 8, 6]} />
-        <meshBasicMaterial
-          color={WAREHOUSE_WORKER_COLORS.safety}
-          transparent
-          opacity={0.3 + 0.45 * cue.intensity}
-          depthTest={policy.depthTest}
-          depthWrite={policy.depthWrite}
-        />
-      </mesh>
+    <group position={cue.origin} quaternion={quaternion}>
+      {cue.waves.map((wave) => (
+        <mesh
+          key={wave.index}
+          position={[0, 0, wave.radius * 0.35]}
+          rotation={[Math.PI / 2, 0, 0]}
+          renderOrder={policy.renderOrder}
+        >
+          <torusGeometry args={[wave.radius, 0.006, 6, 12, Math.PI * 0.7]} />
+          <meshBasicMaterial
+            color={WAREHOUSE_3D_MATERIALS.activeAccent}
+            transparent
+            opacity={wave.opacity}
+            depthTest={policy.depthTest}
+            depthWrite={policy.depthWrite}
+          />
+        </mesh>
+      ))}
     </group>
   );
 }
+
 
 function WorkerMarker({
   graph,

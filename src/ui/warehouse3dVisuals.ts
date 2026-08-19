@@ -26,8 +26,8 @@ export const WAREHOUSE_3D_VISUALS = {
     traversedRadius: 0.04,
     /** Slightly heavier line for the leg the operator is walking right now. */
     activeRadius: 0.058,
-    opacity: 0.42,
-    traversedOpacity: 0.78,
+    opacity: 0.5,
+    traversedOpacity: 0.82,
     activeOpacity: 1,
     y: 0.11,
     radialSegments: 6,
@@ -65,44 +65,46 @@ export const WAREHOUSE_3D_VISUALS = {
  * read as a toy set.
  */
 export const WAREHOUSE_3D_MATERIALS = {
-  background: "#171e27",
-  floor: { color: "#6b747d", roughness: 1 },
-  localAisle: { color: "#767f88", roughness: 1 },
-  internalCrossAisle: { color: "#6f7881", roughness: 1 },
-  blockSeparation: { color: "#68717a", roughness: 1 },
-  aisleMarking: { color: "#c8a446", roughness: 0.9 },
-  perimeterMarking: { color: "#a98b3a", roughness: 0.9 },
-  wall: { color: "#3a434e", roughness: 0.96, opacity: 0.42 },
-  column: { color: "#48525d", roughness: 0.86, metalness: 0.12 },
+  /** The building envelope stays dark; the workspace inside it does not. */
+  background: "#1a212b",
+  /** Bright industrial concrete: the primary plane the whole scene reads against. */
+  floor: { color: "#c6c9c4", roughness: 0.95 },
+  localAisle: { color: "#d2d5cf", roughness: 0.95 },
+  internalCrossAisle: { color: "#c9ccc6", roughness: 0.95 },
+  blockSeparation: { color: "#bfc2bc", roughness: 0.95 },
+  aisleMarking: { color: "#c9a12f", roughness: 0.85 },
+  perimeterMarking: { color: "#ad8a2c", roughness: 0.85 },
+  wall: { color: "#48525e", roughness: 0.96, opacity: 0.45 },
+  column: { color: "#5a6672", roughness: 0.84, metalness: 0.14 },
   overheadFixture: {
-    color: "#dbe6ea",
-    roughness: 0.4,
-    emissive: "#b3c6ce",
-    emissiveIntensity: 0.6,
+    color: "#eef4f6",
+    roughness: 0.35,
+    emissive: "#cfe0e6",
+    emissiveIntensity: 0.7,
   },
-  /** Painted steel racking: uprights read darker and cooler than the beams. */
-  rackUpright: { color: "#4d5a68", roughness: 0.58, metalness: 0.24 },
-  rackBeam: { color: "#5a6773", roughness: 0.66, metalness: 0.18 },
-  rackShelf: { color: "#6d7884", roughness: 0.92, opacity: 0.9 },
-  rackGuard: { color: "#bd9739", roughness: 0.85 },
-  aisleSign: { color: "#8d99a6", roughness: 0.8 },
-  pallet: { color: "#7b6747", roughness: 1 },
-  carton: { color: "#9a8562", roughness: 0.96 },
-  unselectedLocation: { color: "#818d99", roughness: 0.88 },
-  office: { color: "#b8873a", roughness: 0.72 },
-  progressTrack: "#525d69",
-  completedLocation: "#7d8a96",
+  /** Painted steel racking: medium steel, clearly darker than the concrete. */
+  rackUpright: { color: "#5d6975", roughness: 0.55, metalness: 0.3 },
+  rackBeam: { color: "#6b7784", roughness: 0.62, metalness: 0.22 },
+  rackShelf: { color: "#7d8894", roughness: 0.9, opacity: 0.92 },
+  rackGuard: { color: "#c9a12f", roughness: 0.8 },
+  aisleSign: { color: "#9aa5b1", roughness: 0.78 },
+  pallet: { color: "#8a7048", roughness: 1 },
+  carton: { color: "#b0946a", roughness: 0.94 },
+  unselectedLocation: { color: "#7b8794", roughness: 0.85 },
+  office: { color: "#c08d38", roughness: 0.7 },
+  progressTrack: "#8d97a2",
+  completedLocation: "#69747f",
   /** Restrained operational accent, used only for the count actually running. */
-  activeAccent: "#4fd6c4",
+  activeAccent: "#17a8a0",
   lighting: {
-    sky: "#7d8b99",
-    ground: "#2b333c",
-    hemisphereIntensity: 0.82,
+    sky: "#e6edf1",
+    ground: "#6e7681",
+    hemisphereIntensity: 1.15,
     keyPosition: [9, 13, 8],
-    keyIntensity: 1,
+    keyIntensity: 0.95,
     /** A weak opposite fill keeps unlit faces from going flat without shadows. */
     fillPosition: [-8, 7, -6],
-    fillIntensity: 0.42,
+    fillIntensity: 0.4,
   },
   /**
    * Repeated rack geometry cast a dense shadow grid across the aisles and made
@@ -110,7 +112,15 @@ export const WAREHOUSE_3D_MATERIALS = {
    * operator does: it is the one object whose contact with the floor carries
    * operational meaning.
    */
+  /**
+   * Clamp applied to every imported asset material. glTF metalness defaults to
+   * 1, which reads near-black without an environment map; matte steel keeps the
+   * imported rack legible against the bright floor.
+   */
+  importedAsset: { maxMetalness: 0.18, minRoughness: 0.62 },
   shadowCasters: {
+    /** Imported racking follows the same no-shadow rule as the procedural frame. */
+    rackAsset: false,
     rackUpright: false,
     rackBeam: false,
     rackShelf: false,
@@ -129,7 +139,7 @@ export const WAREHOUSE_3D_MATERIALS = {
     /** Below this canvas width the grounding pass is dropped for mobile headroom. */
     minimumCanvasWidth: 640,
     /** Restrained: the operator should be grounded, not dramatically lit. */
-    opacity: 0.28,
+    opacity: 0.3,
   },
 } as const;
 

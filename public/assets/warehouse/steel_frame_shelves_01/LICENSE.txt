@@ -1,0 +1,25 @@
+Steel Frame Shelves 01
+======================
+
+Source:        https://polyhaven.com/a/steel_frame_shelves_01
+Author:        James Ray Cock (Poly Haven)
+License:       CC0 1.0 Universal (Public Domain Dedication)
+License text:  https://polyhaven.com/license
+Redistribution: Permitted. CC0 places the work in the public domain; no
+                permission or attribution is required. Attribution is given
+                here as a courtesy to the author.
+Commercial use: Permitted.
+
+Files in this directory (glTF 2.0, 1K texture set):
+  steel_frame_shelves_01_1k.gltf          2,766 bytes
+  steel_frame_shelves_01.bin            142,312 bytes
+  textures/..._diff_1k.jpg              477,882 bytes
+  textures/..._nor_gl_1k.jpg            318,836 bytes
+  textures/..._arm_1k.jpg               655,560 bytes
+  Total                               ~1.5 MB
+
+Geometry: 1 mesh, 1 material, 4,348 triangles.
+Retrieved: 2026-08-18 from dl.polyhaven.org.
+
+Used in this project as the warehouse rack run asset. It is presentation only:
+warehouse layout, routing, timing, and KPI truth never read asset geometry.

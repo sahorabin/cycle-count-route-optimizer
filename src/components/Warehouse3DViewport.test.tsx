@@ -294,14 +294,19 @@ function collectHexColors(value: unknown): string[] {
 }
 
 describe("warehouse 3D art direction", () => {
-  test("keeps the whole scene palette within a muted industrial range", () => {
-    const colors = collectHexColors(WAREHOUSE_3D_MATERIALS);
+  test("keeps the environment palette muted while the operational accent stays a signal", () => {
+    const { activeAccent, ...environment } = WAREHOUSE_3D_MATERIALS;
+    const colors = collectHexColors(environment);
 
     expect(colors.length).toBeGreaterThan(15);
     for (const color of colors) {
       expect({ color, saturation: hexSaturation(color) < 0.65 })
         .toEqual({ color, saturation: true });
     }
+    // The one thing the eye must find first is deliberately more saturated
+    // than anything it sits on.
+    expect(hexSaturation(activeAccent)).toBeGreaterThan(0.5);
+    expect(hexSaturation(WAREHOUSE_3D_MATERIALS.floor.color)).toBeLessThan(0.1);
     // Guard against a vacuous threshold: the bright tints this replaced fail it.
     expect(hexSaturation("#f59e0b")).toBeGreaterThan(0.65);
     expect(hexSaturation("#2563eb")).toBeGreaterThan(0.65);
@@ -328,7 +333,8 @@ describe("warehouse 3D art direction", () => {
 
     expect(fillIntensity).toBeGreaterThan(0);
     expect(fillIntensity).toBeLessThan(keyIntensity);
-    expect(hemisphereIntensity).toBeLessThan(1);
+    // Ambient carries the facility; the key stays a shaping light.
+    expect(hemisphereIntensity).toBeGreaterThan(keyIntensity);
     expect(WAREHOUSE_3D_MATERIALS.lighting.fillPosition[0])
       .toBeLessThan(WAREHOUSE_3D_MATERIALS.lighting.keyPosition[0]);
   });
@@ -381,7 +387,10 @@ describe("warehouse 3D readability", () => {
   test("never lets repeated rack geometry cast shadows", () => {
     const casters = WAREHOUSE_3D_MATERIALS.shadowCasters;
 
-    for (const structural of ["rackUpright", "rackBeam", "rackShelf", "rackGuard", "aisleSign"] as const) {
+    // The imported rack asset repeats as densely as the procedural frame did.
+    for (const structural of [
+      "rackAsset", "rackUpright", "rackBeam", "rackShelf", "rackGuard", "aisleSign",
+    ] as const) {
       expect({ part: structural, casts: casters[structural] })
         .toEqual({ part: structural, casts: false });
     }
@@ -415,10 +424,11 @@ describe("warehouse 3D readability", () => {
     expect(carton).toBeGreaterThan(rack);
   });
 
-  test("lights the scene without leaning on a single harsh key", () => {
+  test("lights the warehouse from ambient rather than one harsh key", () => {
     const { lighting } = WAREHOUSE_3D_MATERIALS;
 
-    expect(lighting.hemisphereIntensity).toBeGreaterThan(0.7);
+    // A well-lit facility is ambient-led; the key only shapes it.
+    expect(lighting.hemisphereIntensity).toBeGreaterThan(lighting.keyIntensity);
     expect(lighting.fillIntensity / lighting.keyIntensity).toBeGreaterThan(0.3);
     expect(luminance(lighting.sky)).toBeGreaterThan(luminance(lighting.ground));
   });
@@ -437,11 +447,29 @@ describe("warehouse 3D readability", () => {
   });
 
   test("gives the active count the strongest operational accent", () => {
-    const accent = luminance(WAREHOUSE_3D_MATERIALS.activeAccent);
+    const accent = WAREHOUSE_3D_MATERIALS.activeAccent;
 
-    expect(accent).toBeGreaterThan(luminance(WAREHOUSE_3D_MATERIALS.rackUpright.color));
-    expect(accent).toBeGreaterThan(luminance(WAREHOUSE_3D_MATERIALS.floor.color));
-    expect(accent).toBeGreaterThan(luminance(WAREHOUSE_3D_MATERIALS.completedLocation));
+    // On bright concrete the accent wins by chroma, not by being brighter.
+    expect(hexSaturation(accent))
+      .toBeGreaterThan(hexSaturation(WAREHOUSE_3D_MATERIALS.floor.color) + 0.4);
+    expect(hexSaturation(accent))
+      .toBeGreaterThan(hexSaturation(WAREHOUSE_3D_MATERIALS.rackUpright.color) + 0.4);
+    expect(hexSaturation(accent))
+      .toBeGreaterThan(hexSaturation(WAREHOUSE_3D_MATERIALS.completedLocation) + 0.4);
+    expect(luminance(accent)).toBeLessThan(luminance(WAREHOUSE_3D_MATERIALS.floor.color));
+  });
+
+  test("makes the floor the bright plane the warehouse reads against", () => {
+    const floor = luminance(WAREHOUSE_3D_MATERIALS.floor.color);
+    const rack = luminance(WAREHOUSE_3D_MATERIALS.rackUpright.color);
+    const background = luminance(WAREHOUSE_3D_MATERIALS.background);
+
+    // Bright industrial concrete, not another shade of the dark shell.
+    expect(floor).toBeGreaterThan(180);
+    expect(floor - rack).toBeGreaterThan(60);
+    expect(rack - background).toBeGreaterThan(25);
+    // Bright, but not an emissive white-out.
+    expect(floor).toBeLessThan(230);
   });
 
   test("emits only finite environment constants", () => {
