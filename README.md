@@ -1,365 +1,174 @@
 # Cycle Count Route Optimizer
 
-A browser-based tool that helps a warehouse worker plan a physical walking
-route for a cycle count (a partial, recurring inventory audit) and compares
-it against a system-generated route over the same stops.
+**A warehouse route-planning and Digital Twin simulation tool for reducing non-value-added walking during cycle counting.**
 
-## Problem statement
+[Live demo](https://cycle-count-route-optimizer.vercel.app) ·
+[Demo video](docs/assets/demo/cycle-count-route-optimizer-demo.mp4) ·
+[Case study](docs/PORTFOLIO_CASE_STUDY.md) ·
+[Architecture](docs/ARCHITECTURE.md)
 
-Warehouse workers doing cycle counts typically pick which bins to check and
-then walk them in whatever order occurs to them. That order is rarely the
-shortest path through the aisles, and there's usually no easy way to see how
-much walking a better-ordered route would save before committing to one.
+![The 3D Digital Twin replaying a cycle-count route: a rigged warehouse operator in hi-vis PPE walking an aisle-constrained route through racking, with live distance and time KPIs](docs/assets/screenshots/digital-twin-overview.png)
 
-## What the application does
+### Illustrative scenario
 
-The app models a warehouse as a graph of aisles and cycle-count locations,
-lets a worker pick today's count locations and build a visit order by
-clicking them on a floor-plan map, then computes a system-recommended route
-over the same stops and shows a side-by-side comparison — total distance,
-estimated time, and percentage improvement — using only aisle-constrained
-walking distance, never straight-line distance. After generating the
-comparison, the worker can replay the Actual / Worker and Recommended /
-Optimized routes simultaneously in matched 2D SVG or 3D warehouse views
-driven by one deterministic shared playback clock. The shared renderer
-toggle defaults to 3D, keeps both sides in the same mode, and retains SVG as
-the lightweight fallback when WebGL is unavailable.
+Seven bins across two rack blocks, entered in the order a count list sorted by **bin ID** rather than by location would arrive:
 
-**This is a portfolio/demonstration project.** It runs entirely in the
-browser against one deterministic, synthetic 100-location warehouse layout
-included in the repository. It has not been deployed against a real
-warehouse, and the distance/time figures it displays are computed results
-from that included model — not measured or reported results from any real
-facility or customer.
+| | Worker route | Recommended route |
+|---|---|---|
+| Travel distance | 1,161.5 m | 656.0 m |
+| Operating time | 22:37 | 14:11 |
 
-## Screenshots
+**505.5 m and 8:26 of walking saved — a 43.5% reduction in travel distance.**
 
-<p>
-  <img src="public/screenshots/desktop-route-comparison-ko.png" alt="Desktop view (Korean) showing the worker route vs. system-recommended route comparison, with distance units and both the location-state and route-line legends" width="700" />
-</p>
-<p>
-  <img src="public/screenshots/mobile-map-swipe-ko.png" alt="375px mobile view (Korean) showing the zoomed, horizontally pannable warehouse map with the swipe guidance hint" width="260" />
-</p>
+These are real outputs of the deployed application for **one reproducible illustrative scenario using a fixed bin-ID ordering rule** — not a warehouse-wide benchmark, a population average, or a typical or expected result. The same seven bins entered in zone order produce 0.0%, because that order is already optimal.
 
-Both screenshots show the included demonstration warehouse fixture, not a
-real facility.
+---
 
-## Intended use case
+## The operational problem
 
-Cycle counting is a common inventory-control practice: instead of shutting
-down operations for a full physical inventory, a subset of locations gets
-counted on a rotating basis. This app targets the "which locations today,
-and in what order" planning step of that workflow — the kind of tool a
-warehouse supervisor might hand to a picker at the start of a shift.
+Cycle counting is a recurring inventory-control process: rather than shutting a facility down for a full physical inventory, a rotating subset of storage locations is counted and reconciled against system inventory. A worker is handed a list of bins and has to walk them.
 
-## Main workflow
+Execution time splits into two parts that behave differently:
 
-The UI is organized as one page with three sequential steps:
+- **Travel** — walking between locations. Necessary non-value-added time: it enables the count but does not itself improve inventory accuracy.
+- **Service (counting)** — the work at the bin. The value-adding part, and its duration depends on the location, not the route.
 
-1. **Select locations** — check which of the 100 locations need counting
-   today, with search, zone filtering, and a compact "selected" tray.
-2. **Build the worker's route** — click the selected locations on the map,
-   in the order the worker intends to walk them. Office is always the fixed
-   starting point; there is no return trip.
-3. **Compare routes** — generate a system-recommended route over the exact
-   same stops and see it plotted alongside the worker's route, with total
-   distance, estimated time (from a configurable walking speed), and percent
-   improvement.
+Sequencing affects only the first, so a tool reporting a single blended "time saved" number overstates its own value.
 
-The resulting product flow is:
+One more constraint separates warehouse routing from generic point-to-point optimization: **workers cannot walk through racking.** Two bins can be metres apart in a straight line and far apart on foot, because reaching one from the other means walking to the end of an aisle and back down the next.
 
-```text
-Target selection
-→ Worker route
-→ Recommended route
-→ Deterministic comparison
-→ Shared-clock simulation
-→ 2D or 3D rendering
+## How it works
+
+![The planning workspace: selected count locations, a numbered worker visit order with drag handles, the route order strip, and the aisle-constrained warehouse map](docs/assets/screenshots/planning-workspace.png)
+
+1. **Select** the locations that need counting today, filtered by zone or search.
+2. **Selection order becomes the visit order** — the plan is a by-product of choosing the work, not a separate step.
+3. **Drag to refine** the sequence, or use keyboard-accessible move controls.
+4. **Generate the recommended route** over the exact same target set.
+5. **Compare** travel distance and walking time.
+6. **Replay both plans** in the 3D Digital Twin under one shared clock.
+7. **Watch travel and counting** as distinct physical states.
+8. **Complete the work** — completed locations leave the active target pool.
+
+## Worker vs. Recommended
+
+![Compare mode: the worker route and the system recommended route side by side, with distance improvement, distance saved, and walking-time saving](docs/assets/screenshots/route-comparison.png)
+
+The **worker route** is the operator's own visit sequence. The **recommended route** is a Nearest Neighbor heuristic refined by 2-opt local search.
+
+Both run over the same warehouse, the same locations, the same start point, the same walking speed, and the same per-location service assumptions, under one playback clock. **Only the route sequence differs** — which is what makes the comparison a controlled one rather than a demo.
+
+## Route optimization
+
+The warehouse is modeled as a graph with two distinct kinds of point, and keeping them distinct is the core modeling decision:
+
+- **Aisle nodes** are walkable positions in the aisle network, joined by edges with real lengths.
+- **Attachment points** — every cycle-count location, plus the start point — are *not* walkable. Each hangs off exactly one aisle node by a short access spur.
+
+This prevents the worst bug class in warehouse routing: a bin silently used as a pass-through waypoint in someone else's path. A worker walks *past* a rack face, never *through* a bin. All routing distance comes from aisle edge lengths and access spurs — never from screen or 3D-world geometry.
+
+On that graph: **Dijkstra** computes aisle-constrained shortest paths into an all-pairs distance matrix over the visit set — the start point plus the locations being routed; **Nearest Neighbor** builds an initial sequence with deterministic tie-breaking; **2-opt** improves it by reversing segments while that strictly reduces the real open-path total.
+
+**The recommended route is heuristic, not a guaranteed global optimum.** It reaches a 2-opt local optimum — no improving segment reversal remains, which says nothing about moves outside that neighbourhood. This is not an exact TSP solver, and there is no machine learning anywhere in the project. Where the worker's own route is already good, the app reports 0.0% rather than manufacturing a win.
+
+## Physical simulation
+
+Route truth flows through three layers, each with one job:
+
+- **`RouteTraversal`** — spatial truth: the node-by-node walk, expanded without recomputing anything.
+- **`RouteTimeline`** — temporal truth: one physical time axis of `TRAVEL` phases and `SERVICE` phases.
+- **`SimulationSnapshot`** — renderer-independent state at one instant.
+
+Service durations are assigned per location from a stable ordinal of the location id, so a bin always carries the same workload regardless of route order or which route is simulated. **Service time never enters optimization** — it is absent from Dijkstra, Nearest Neighbor, 2-opt, route scoring, and the walking KPI.
+
+Playback rate (0.5×–10×) changes replay progression only. It cannot alter route distance, walking duration, service duration, or any KPI — those are computed before the clock exists. Physical walking speed is a separate quantity entirely.
+
+The 3D layer exists because the audience is operational: a route printed as a list of bin ids does not let anyone judge whether a plan is sensible, but watching an operator cross a building between two consecutive stops does. It uses CC0 rack, pallet, carton, and rigged-operator assets dressed renderer-side in warehouse PPE with a handheld scanner. The walk cycle is driven by distance travelled rather than by a clock, so pausing freezes the stride and seeking lands on the pose belonging to that point of the route.
+
+## Architecture
+
+![System architecture: operations input feeding a domain and simulation truth layer, then a read-only boundary into the Digital Twin presentation layer](docs/assets/architecture-overview.svg)
+
+**Operational truth flows into presentation; the renderer can never redefine it.**
+
+- Domain and simulation code never import the renderer or asset layer — enforced by a test that globs every source file in both directories.
+- Display and 3D-world coordinates reach renderers only. A test applies an *anisotropic* transform to every display coordinate and asserts both routes stay byte-identical.
+- Service profiles enter `RouteTimeline`, never the optimizer.
+- Worker and Recommended share every assumption and one clock while keeping independent route truth.
+
+Detailed diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
+## Completion workflow
+
+![Completion state: progress at 35% with 7 completed and 13 remaining, green completed markers on the map, and a completed location struck through and disabled in the list](docs/assets/screenshots/completion-workflow.png)
+
+Completion is operational state, not a cosmetic checkbox. Completed locations leave the selection and the route, and are locked out of reselection. Undo restores eligibility without silently reinserting the target into the current plan.
+
+## Demo video
+
+**[Watch the 31-second production demo →](docs/assets/demo/cycle-count-route-optimizer-demo.mp4)** *(MP4, 3.5 MB, silent)*
+
+Plan → optimize → simulate → count → complete, recorded from the deployed application in one continuous session.
+
+## Verification
+
+```
+657 tests passed / 0 failed        TypeScript  PASS
+47 test files                      lint        PASS
+                                   build       PASS
 ```
 
-Once a comparison exists, the **Route replay** section displays the worker and
-recommended routes at the same time. Both start at simulation time zero and
-share Play/Pause, Reset, bidirectional seek, and 0.5x, 1x, 2x, 5x, and 10x
-playback controls. Each route separately reports distance traveled and total
-distance, completed locations, physical route duration, and completion state.
-One shared 2D/3D toggle changes both replay viewports without resetting the
-clock, seek position, or completion state. 3D is the default; the existing SVG
-view remains available and is used automatically if WebGL cannot initialize.
-Playback rate changes only how quickly the replay is viewed; it never changes
-physical walking speed or route duration. If one route finishes first, it
-remains completed at its final location while the shared clock continues
-until the longer route finishes.
+Frame pacing measured against the deployed build in real Chrome, sampling `requestAnimationFrame` for 9 seconds per scenario with a long-task observer running:
 
-A location can also be marked complete once counted, and a compact progress
-panel tracks completed vs. remaining against a daily target count.
+| Scenario | Median | p95 | Frames > 33 ms | Long tasks |
+|---|---|---|---|---|
+| Explore | 16.7 ms | 16.8 ms | 0 | 0 |
+| Worker Focus | 16.7 ms | 16.7 ms | 0 | 0 |
+| Compare (dual canvas) | 16.7 ms | 16.8 ms | 0 | 0 |
 
-## Routing algorithms (verified against source)
+Asset reuse was verified across 14 consecutive Explore↔Compare cycles with zero duplicate network requests. **These measurements come from one tested desktop Chrome environment and are not a claim about all hardware.**
 
-All routing distance is computed over the aisle graph, never over the (x, y)
-coordinates used for on-screen drawing — the included sample warehouse is
-deliberately laid out so straight-line and aisle-constrained distance
-diverge, so this distinction is actually exercised.
+## Key engineering decisions
 
-- **Dijkstra** (`src/domain/dijkstra.ts`) — single-source shortest paths over
-  the walkable aisle-node graph, used to build an all-pairs distance matrix
-  (`src/domain/distanceMatrix.ts`) over the start point plus every
-  cycle-count location.
-- **Nearest neighbor** (`src/domain/nearestNeighbor.ts`) — a greedy
-  fixed-start heuristic: from the current point, repeatedly move to the
-  closest unvisited target by aisle-constrained distance until all targets
-  are visited. Never returns to the start.
-- **2-opt local search** (`src/domain/twoOpt.ts`) — deterministic local
-  search that repeatedly reverses route segments when doing so strictly
-  reduces total distance, stopping at the first local optimum. It operates
-  on an *open* path (no closed-tour edge back to the start), so segment
-  reversals are handled accordingly rather than reusing a standard
-  closed-tour formula.
+- Modeled travel as aisle-constrained graph movement rather than Euclidean screen distance, with bins as non-walkable attachment points so they can never become pass-through waypoints.
+- Kept service time outside route optimization, because sequencing compresses travel and nothing else.
+- Chose heuristic optimization and said so, rather than implying exact TSP optimality.
+- Separated playback rate from physical truth, so reported numbers cannot shift when someone hits fast-forward.
+- Made rendering read-only with respect to domain state, and encoded that as executable tests rather than documentation.
+- Kept Compare as two independent canvases for route, camera, and skeleton isolation after measuring it costs nothing in frame pacing.
+- Measured production performance before optimizing, then declined to optimize on the evidence.
 
-The "system recommended route" shown in the UI is nearest-neighbor refined
-by 2-opt. This is a reasonable heuristic combination, not a guarantee of the
-mathematically optimal route — the UI deliberately never claims otherwise.
+## What this project demonstrates
 
-## Simulation architecture and completed phases
+**Logistics** — cycle-count workflow modeling, aisle-constrained spatial reasoning, the travel/service distinction, completion-state logic.
 
-The deterministic simulation and rendering pipeline is:
+**Algorithms** — graph modeling, shortest paths, heuristic route optimization over a fixed-start open path, deterministic comparison.
 
-```text
-RouteComputation
-→ RouteTraversal
-→ RouteTimeline
-→ Shared Playback Clock
-→ SimulationSnapshot
-→ Renderer projection
-→ SVG or 3D renderer
-```
+**Software and 3D** — React and TypeScript architecture, a layered simulation model, persistence with regression tests, Three.js / React Three Fiber, a licence-audited asset pipeline with procedural fallbacks.
 
-`RouteTraversal` expands a computed stop order through the existing
-`pathMatrix`. `RouteTimeline` projects that traversal onto physical walking
-time. The pure simulation engine derives a complete `SimulationSnapshot` for
-any timeline time. Renderer projections consume the snapshot only to decide
-what to draw. SVG coordinates and Three.js world coordinates never determine
-routing distance, elapsed time, progress, or KPI values.
-
-S5 composes the two timelines around exactly one shared time source:
-
-```text
-                    Shared Playback Clock
-                            │
-                      simulationTime
-                ┌───────────┴───────────┐
-                ↓                       ↓
-         Worker Timeline         Recommended Timeline
-                ↓                       ↓
-         Worker Snapshot         Recommended Snapshot
-                ↓                       ↓
-       Renderer Projection      Renderer Projection
-                ↓                       ↓
-          SVG or 3D                 SVG or 3D
-```
-
-The same warehouse, selected locations, office start, physical walking speed,
-renderer mode, rendering assumptions, and simulation time are used on both
-sides. Only the route sequence differs. Both snapshots come from the same
-logical animation-frame loop and neither renderer owns routing, timing, or KPI
-logic.
-
-Completed simulation phases:
-
-- **S1 — RouteTraversal Foundation** — expands the fixed-start open route
-  into its validated aisle-by-aisle traversal.
-- **S2 — Deterministic RouteTimeline** — converts traversal distance into a
-  deterministic physical timeline using the current walking speed.
-- **S3 — Deterministic Simulation Engine** — projects any timeline time into
-  an immutable simulation snapshot and supplies pure playback-clock controls.
-- **S4 — SVG Simulation Replay** — connects the pure clock and snapshots to
-  the existing warehouse SVG through a reusable single-route replay UI.
-- **S5 — Shared-Clock Side-by-Side Comparison** — derives both route
-  snapshots from one playback clock and renders them through the same reusable
-  viewport logic.
-- **S6 — 3D Warehouse Renderer** — adds a lazy-loaded procedural Three.js /
-  React Three Fiber projection of the same snapshots, with one shared 2D/3D
-  mode and an SVG fallback for unavailable WebGL.
-
-**S1 through S6 are complete.** The next planned phase is the **Final Product
-Gate**, covering functional regression, visual QA, desktop/mobile and 2D/3D
-consistency, performance/loading, bilingual review, production readiness,
-documentation/release review, and deployment verification. It has not begun.
-
-### S6 3D renderer scope
-
-The 3D view is implemented with `three` 0.185.1, `@react-three/fiber` 9.7.0,
-and `@types/three` 0.185.4. Drei is not installed. It is a deliberately
-procedural warehouse visualization, not a digital twin: the scene contains a
-floor, rack blocks, office marker, cycle-count locations, route trail,
-procedural worker marker, ambient light, directional light, and a fixed
-orthographic camera. Warehouse `(x, y)` display coordinates map to Three.js
-`(X, Z)`; scene height `Y` is decorative only.
-
-External 3D models/assets, detailed shelf or pallet geometry, forklifts,
-AGVs, collision detection, physics, orbit controls, post-processing, and
-photorealism are outside S6. The view uses demand-based rendering and caps
-device pixel ratio at 1–1.5. Its lazy-loaded production chunk is currently
-about 888 kB before compression; this observed size is not a contractual
-budget, and keeps the initial application bundle smaller.
-
-## Key features
-
-- Click-to-build manual route on an SVG floor-plan map (rack blocks, aisle
-  corridors, and bin markers — not a raw graph-node visualization)
-- Four distinct, non-color-only location states: available, selected,
-  in-route, completed
-- Worker route vs. system-recommended route comparison with a single-sentence
-  savings summary, and a route-visibility toggle (worker / recommended / both)
-- Simultaneous Actual / Worker and Recommended / Optimized replay driven by
-  one shared playback clock, with Play/Pause, Reset, bidirectional seek, and
-  0.5x, 1x, 2x, 5x, and 10x playback-rate presets
-- One bilingual, responsive 2D/3D renderer toggle for both route views; 3D is
-  the default, SVG is retained, and WebGL failure falls back to SVG
-- Per-route state sourced from simulation truth: distance traveled and total
-  distance, completed locations, physical route duration, and completion state
-- Equal side-by-side replay cards on desktop and readable vertically stacked
-  cards on mobile
-- A collapsed "technical details" panel showing the raw Nearest Neighbor vs.
-  2-opt output, kept separate from the primary worker/recommended comparison
-- A deterministic, generated 100-location fixture (10 zones × 10 bins) with
-  no `Math.random` anywhere in its construction
-
-## Localization
-
-A small custom `t()`-based translation layer (`src/i18n/`) drives the entire
-UI in Korean (default) and English, with live switching and no page reload.
-There is no external i18n library dependency.
-
-## Persistence
-
-Target count, completed-location ids, language, walking speed, selected
-locations, manual-route stop order, and whether a comparison was generated
-persist to `localStorage` (`src/persistence/persistedState.ts`). Each field is
-validated independently on load and falls back to a default if malformed, so
-one corrupted field can't take down the rest of the saved state. Stored ids
-are reconciled with the live 100-location fixture and current selection.
-
-Runtime simulation state is deliberately ephemeral. Current simulation time,
-playing/paused state, playback rate, snapshots, simulated completed locations,
-marker positions, and renderer runtime state are not persisted.
-
-## Responsive behavior
-
-The layout is a single page (not separate routes) that adapts across three
-breakpoints, down to a 375px-wide mobile viewport. On mobile, the map
-defaults to a zoomed-in, horizontally pannable view — with a short on-screen
-hint — instead of shrinking the whole floor plan to an unreadable size; a
-"view full warehouse" toggle switches to a fit-to-width view. Horizontal
-scrolling stays confined to the map viewport; it does not cause page-level
-overflow. The two simulation cards use a side-by-side layout on desktop and
-stack vertically at mobile widths while retaining the same shared controls
-and matched SVG or canvas renderer mode.
+**Product** — designing the workflow around how the work is actually done, progressive disclosure, and shipping it.
 
 ## Tech stack
 
-- React 19 + TypeScript
-- Vite 8 (build/dev server)
-- Three.js 0.185.1 + React Three Fiber 9.7.0 (`@types/three` 0.185.4; no Drei)
-- Vitest 4 + @testing-library/react (377 tests across 38 files)
-- oxlint (linting)
-- No backend or external API calls
+React 19 · TypeScript · Vite · Three.js 0.185 · React Three Fiber 9 · Vitest · oxlint · deployed on Vercel. No backend, no database, no environment variables.
 
-Current verified baseline:
-
-```text
-377 tests passed
-0 failed
-TypeScript PASS
-lint PASS
-production build PASS
-git diff --check PASS
-```
-
-## Getting started
+## Run locally
 
 ```bash
 npm install
-npm run dev
+npm run dev      # Vite dev server
+npm test         # vitest run
+npm run build    # tsc -b && vite build
 ```
 
-Then open the printed local URL. No environment variables or backend setup
-are required.
+## Production
 
-## Scripts
+Deployed at **https://cycle-count-route-optimizer.vercel.app**
 
-```bash
-npm run dev         # start the Vite dev server
-npm test             # run the test suite once (vitest run)
-npm run test:watch   # run tests in watch mode
-npm run lint         # oxlint
-npm run build        # tsc -b && vite build (this also performs type-checking;
-                      # there is no separate typecheck script)
-npm run preview      # locally preview the production build
-```
+A portfolio demonstration. It runs entirely in the browser against one deterministic, synthetic 100-location warehouse fixture included in the repository. The counting service durations (20 / 35 / 60 seconds by class) are synthetic demo assumptions, disclosed as such in the UI — not measured productivity standards. The project has not been deployed against a real facility, and no figure it displays is a measured result from any real warehouse or customer.
 
-Run a single test file: `npx vitest run src/domain/twoOpt.test.ts`
-Run tests matching a name: `npx vitest run -t "nearest neighbor"`
+---
 
-## Project structure
+**[Read the full case study → docs/PORTFOLIO_CASE_STUDY.md](docs/PORTFOLIO_CASE_STUDY.md)**
 
-The app keeps routing and simulation truth below its presentation adapters:
-**domain → simulation/UI adapters → React components**. Domain code never
-imports from `simulation/`, `ui/`, or `components/`; renderer code only
-consumes completed domain/simulation values.
-
-```
-src/
-  domain/        Graph validation, routing algorithms, fixed-start-open-path
-                  contract, RouteTraversal, and RouteTimeline
-  simulation/    Pure snapshot projection and playback-clock state operations
-  ui/             Presentation-only helpers with no routing logic
-                  (SVG coordinates, route-path expansion, comparison math,
-                  shared simulation composition, simulation-marker projection,
-                  3D world projection, duration formatting, rack layout)
-  components/     React components (map, selectors, route editor, comparison
-                  panel, shared-clock replay viewports, lazy 3D viewport,
-                  progress, workflow, language)
-  i18n/           Translation context, dictionary, and hook
-  persistence/     localStorage read/write with per-field validation
-  hooks/          Manual-route state and the React playback-frame adapter
-  data/           The sample and 100-location warehouse fixtures
-```
-
-## Known scope and limitations
-
-- Single, synthetic, hard-coded warehouse layout — there is no way to import
-  a real facility's floor plan or import/export location data.
-- No backend: all state is local to one browser (`localStorage`), so there
-  is no multi-user or multi-device sync.
-- No authentication, and no real-world GPS or indoor-positioning
-  integration — location coordinates are display-only renderer positions, not
-  real-world measurements.
-- The 3D renderer is a procedural, fixed-camera operational visualization,
-  not a photorealistic warehouse digital twin. Detailed assets, physics,
-  collision systems, vehicles, orbit controls, and post-processing are not
-  implemented; Drei is not installed.
-- The "technical details" panel (raw Nearest Neighbor vs. 2-opt) is
-  intentionally left untranslated/unstyled as a transparency artifact, not a
-  primary UI surface.
-- This project has not been deployed or used against a real warehouse; all
-  distance/time figures shown are computed from the included model, not
-  reported operational results.
-- S1–S6 implementation is complete, but the Final Product Gate and release /
-  deployment verification remain outstanding.
-
-## Portfolio-oriented design and engineering decisions
-
-This project was built to demonstrate a few specific things end to end:
-
-- A clean separation between routing math (never touches pixels) and display
-  geometry (never touches distance) — enforced by the one-way
-  domain/simulation-to-renderer flow and exercised by a warehouse layout
-  where the two distance notions actually diverge.
-- Test-driven development throughout: each domain module pairs a pure
-  validator/compute function with a throwing "assert" wrapper, and both are
-  covered by tests written alongside the implementation.
-- Accessibility as a first-class constraint: location states are
-  distinguished by shape/icon/border, not color alone; the progress bar
-  carries full ARIA `role="progressbar"` semantics.
-- Bilingual UI built without an external i18n framework, to keep the
-  dependency surface minimal for a small app.
+Built by [sahorabin](https://github.com/sahorabin).

@@ -23,8 +23,27 @@ dist-ssr
 *.sln
 *.sw?
 
-# Internal session-continuity / planning docs -- not published
+# Internal session-continuity / planning docs -- not published.
+# docs/* (not docs/) so individual published portfolio documents can be
+# re-included below; a bare docs/ excludes the directory itself and Git
+# then refuses to re-include anything inside it.
 CLAUDE.md
-docs/
+docs/*
+!docs/PORTFOLIO_CASE_STUDY.md
+!docs/ARCHITECTURE.md
+!docs/assets/
+docs/assets/*
+!docs/assets/architecture-overview.svg
+!docs/SCREENSHOT_EVIDENCE.md
+!docs/DEMO_VIDEO_EVIDENCE.md
+!docs/assets/demo/
+docs/assets/demo/*
+!docs/assets/demo/cycle-count-route-optimizer-demo.mp4
+!docs/assets/screenshots/
+docs/assets/screenshots/*
+!docs/assets/screenshots/planning-workspace.png
+!docs/assets/screenshots/route-comparison.png
+!docs/assets/screenshots/digital-twin-overview.png
+!docs/assets/screenshots/completion-workflow.png
 .vercel
 .env*
