@@ -238,12 +238,12 @@ describe("App (Phase 5 dashboard)", () => {
     expect(screen.getByText("Recommendation comparison")).toBeTruthy();
     expect(screen.getByText("Play simulation", { selector: ".workflow-steps__label" }).closest("li")?.getAttribute("aria-current"))
       .toBe("step");
-    const centerPlay = screen.getByRole("button", { name: /Play simulation/ });
+    const centerPlay = document.querySelector<HTMLButtonElement>(".twin__center-play")!;
     fireEvent.click(centerPlay);
-    expect(screen.queryByRole("button", { name: /Play simulation/ })).toBeNull();
+    expect(document.querySelector(".twin__center-play")).toBeNull();
     expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Reset" }));
-    expect(screen.getByRole("button", { name: /Play simulation/ })).toBeTruthy();
+    expect(document.querySelector(".twin__center-play")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Expand minimap" }));
     expect(document.querySelector(".twin__minimap--expanded")).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Shrink minimap" }));
@@ -414,11 +414,12 @@ describe("App (Phase 5 dashboard)", () => {
     expect(steps()[0].getAttribute("aria-current")).toBe("step");
 
     selectLocation("Zone A - Bin 01");
-    expect(steps()[1].getAttribute("aria-current")).toBe("step");
+    expect(steps()[0].getAttribute("aria-current")).toBe("step");
 
     selectLocation("Zone A - Bin 02");
     clickOnMap("Zone A - Bin 01");
     clickOnMap("Zone A - Bin 02");
+    openRoutePanel();
     expect(steps()[1].getAttribute("aria-current")).toBe("step");
   });
 
@@ -585,5 +586,177 @@ describe("App (Phase 5 dashboard)", () => {
     expect(document.querySelector('[data-location-id="loc-B03"]')!.getAttribute("data-state")).toBe(
       "available",
     );
+  });
+});
+
+function generateClosureRun() {
+  selectLocation("Zone C - Bin 03");
+  selectLocation("Zone A - Bin 01");
+  selectLocation("Zone B - Bin 03");
+  openRoutePanel();
+  fireEvent.click(screen.getByRole("button", { name: "Generate recommended route" }));
+}
+function finishClosureRun() {
+  const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+  fireEvent.change(seek, { target: { value: seek.max } });
+}
+function storedWork() {
+  return JSON.parse(window.localStorage.getItem("cycle-count-route-optimizer:v1")!);
+}
+function expectCleanWork() {
+  expect(storedWork()).toMatchObject({ completedIds: [], selectedIds: [], manualRouteStopIds: [], comparisonRequested: false, targetCount: 20, language: "en" });
+  expect(document.querySelector(".ops-panel")).toBeNull();
+  expect(document.querySelector('[data-location-id="loc-A01"]')?.getAttribute("data-state")).toBe("available");
+  expect(document.querySelector("dialog.workflow-dialog")).toBeNull();
+  startDemo();
+  expect(manualRouteLabels()).toEqual(["Office (fixed start)"]);
+}
+
+describe("workflow closure", () => {
+  test("completion opens once, reports the finished run, and review/reopen preserve work", () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    generateClosureRun();
+    finishClosureRun();
+    const dialog = screen.getByRole("dialog", { name: "Cycle Count Complete" });
+    expect(dialog.textContent).toContain("3 / 3");
+    expect(dialog.textContent).toContain("Worker route");
+    expect(dialog.textContent).toContain("System recommended route");
+    expect(dialog.textContent).toContain("Distance saved");
+    expect(dialog.textContent).toContain("Walking-time saving");
+    expect(dialog.textContent).toContain("Counting");
+    expect(dialog.textContent).toContain("Identical for both routes");
+    expect(dialog.textContent).toContain("Locations and count-service time are identical; only the visit sequence changed.");
+    expect(storedWork().completedIds).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "Review Results" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    finishClosureRun();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    openLocationsPanel();
+    expect((screen.getByRole("checkbox", { name: /Zone A - Bin 01/ }) as HTMLInputElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "View Results" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  test("ordinary reload and Reset Route preserve completion; confirmed full reset survives reload", () => {
+    const first = render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    generateClosureRun();
+    finishClosureRun();
+    fireEvent.click(screen.getByRole("button", { name: "Review Results" }));
+    first.unmount();
+    const second = render(<App />);
+    expect(storedWork().completedIds).toHaveLength(3);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    selectLocation("Zone A - Bin 02");
+    openRoutePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Reset route" }));
+    expect(storedWork().completedIds).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "Reset Demo" }));
+    expect(screen.getByRole("dialog").textContent).toContain("This action cannot be undone.");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(storedWork().completedIds).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "Reset Demo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset All" }));
+    expectCleanWork();
+    second.unmount();
+    render(<App />);
+    expectCleanWork();
+    selectLocation("Zone A - Bin 01");
+    expect(storedWork().selectedIds).toEqual(["loc-A01"]);
+  });
+
+  test("Start New Work uses confirmation and clears comparison and playback only after confirmation", () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    generateClosureRun();
+    finishClosureRun();
+    fireEvent.click(screen.getByRole("button", { name: "Start New Work" }));
+    expect(screen.getByRole("dialog", { name: "Reset Demo" })).toBeTruthy();
+    expect(storedWork().completedIds).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "Reset All" }));
+    expectCleanWork();
+    generateClosureRun();
+    expect((screen.getByLabelText("Replay position") as HTMLInputElement).value).toBe("0");
+    expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
+  });
+});
+
+
+describe("workflow navigation and modal dismissals", () => {
+  test("step buttons reveal and focus destinations with missing simulation prerequisites", () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    fireEvent.click(screen.getByRole("button", { name: "1 Select locations" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("button", { name: "Locations" }).getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(screen.getByPlaceholderText("Search locations"));
+    fireEvent.click(screen.getByRole("button", { name: "2 Generate & compare" }));
+    expect(screen.getByRole("button", { name: "Route order" }).getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(screen.getByRole("region", { name: "Worker visit order" }));
+    fireEvent.click(screen.getByRole("button", { name: "3 Play simulation" }));
+    expect(screen.getByText("To view the simulation, select at least two locations and generate a recommended route.").getAttribute("role")).toBe("status");
+    expect((screen.getByRole("button", { name: "Generate recommended route" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(document.querySelector(".ops-panel")).toBeNull();
+  });
+
+  test("step navigation preserves comparison and playback when returning to simulation", () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    generateClosureRun();
+    const seek = screen.getByLabelText("Replay position") as HTMLInputElement;
+    fireEvent.change(seek, { target: { value: "20" } });
+    fireEvent.click(screen.getByRole("button", { name: "1 Select locations" }));
+    expect(screen.getByRole("button", { name: "Locations" }).getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "2 Generate & compare" }));
+    expect(screen.getByRole("button", { name: "Route order" }).getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "3 Play simulation" }));
+    expect(screen.getByRole("button", { name: "Route order" }).getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(document.querySelector(".twin__timeline"));
+    expect(seek.value).toBe("20");
+    expect(storedWork().comparisonRequested).toBe(true);
+  });
+
+  test("completion X dismisses without clearing result or completed work", () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    generateClosureRun();
+    finishClosureRun();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(storedWork().completedIds).toHaveLength(3);
+    expect(storedWork().comparisonRequested).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "View Results" }));
+    expect(screen.getByRole("dialog", { name: "Cycle Count Complete" })).toBeTruthy();
+  });
+
+  test("guide X and Escape dismiss without resetting work and restore focus", () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    selectLocation("Zone A - Bin 01");
+    const reopen = screen.getByRole("button", { name: "Open guide" });
+    reopen.focus();
+    fireEvent.click(reopen);
+    expect(screen.getByRole("button", { name: "Close" })).toBe(document.activeElement);
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(storedWork().selectedIds).toEqual(["loc-A01"]);
+    // Reopen button is recreated as the overlay closes.
+    expect(screen.getByRole("button", { name: "Open guide" })).toBe(document.activeElement);
+  });
+
+  test("reset footer retains explicit secondary and destructive action structure", () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "English" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset Demo" }));
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    const reset = screen.getByRole("button", { name: "Reset All" });
+    expect(cancel.parentElement?.tagName).toBe("FOOTER");
+    expect(reset.parentElement).toBe(cancel.parentElement);
+    expect(reset.className).toBe("closure-destructive");
+    expect(document.activeElement).toBe(cancel);
   });
 });

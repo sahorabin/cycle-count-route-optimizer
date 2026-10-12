@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useTranslation } from "../i18n/useTranslation";
 import {
   WorkspaceUtilityPanel,
@@ -16,6 +16,7 @@ export function DigitalTwinPlanningWorkspace({
   showWelcome,
   onStart,
   onReopenGuide,
+  onDismissGuide,
   activePanel,
   onPanelChange,
 }: {
@@ -28,13 +29,37 @@ export function DigitalTwinPlanningWorkspace({
   guidance: ReactNode;
   showWelcome: boolean;
   onStart: () => void;
+  onDismissGuide: () => void;
   onReopenGuide: () => void;
   activePanel: WorkspacePanel;
   onPanelChange: (panel: WorkspacePanel) => void;
 }) {
   const { t } = useTranslation();
+  const workspaceRef = useRef<HTMLElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
+  const dismissRef = useRef(onDismissGuide);
+  dismissRef.current = onDismissGuide;
+  useEffect(() => {
+    if (!showWelcome) {
+      const previous = previousFocus.current;
+      if (previous) {
+        if (previous.isConnected && previous !== document.body) previous.focus();
+        else workspaceRef.current?.querySelector<HTMLButtonElement>(".workspace-guide-reopen")?.focus();
+        previousFocus.current = null;
+      }
+      return;
+    }
+    previousFocus.current = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !document.querySelector("dialog[open]")) { event.preventDefault(); dismissRef.current(); }
+    };
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("keydown", escape); };
+  }, [showWelcome]);
   return (
-    <section className="twin twin--planning" aria-labelledby="planning-workspace-title">
+    <section ref={workspaceRef} className="twin twin--planning" aria-labelledby="planning-workspace-title">
       <header className="twin__bar">
         <div className="twin__identity">
           <h1 id="planning-workspace-title">{t("twin.title")}</h1>
@@ -62,6 +87,7 @@ export function DigitalTwinPlanningWorkspace({
           {showWelcome ? (
             <div className="workspace-welcome" role="dialog" aria-labelledby="workspace-welcome-title">
               <div className="workspace-welcome__card">
+                <button ref={closeRef} className="modal-close" type="button" aria-label={t("modal.close")} onClick={onDismissGuide}><span aria-hidden="true">×</span></button>
                 <span className="workspace-welcome__eyebrow">{t("workspace.welcomeEyebrow")}</span>
                 <h2 id="workspace-welcome-title">{t("workspace.welcomeTitle")}</h2>
                 <p>{t("workspace.welcomeBody")}</p>

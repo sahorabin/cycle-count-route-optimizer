@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { NodeId, WarehouseGraph } from "../domain/types";
 import { useSimulationPlayback } from "../hooks/useSimulationPlayback";
 import { useTranslation } from "../i18n/useTranslation";
@@ -25,7 +25,11 @@ import {
   type SimulationRendererMode,
 } from "./RouteSimulationReplay";
 
+import { CompletionSummary } from "./CompletionSummary";
+
 interface RouteSimulationComparisonProps {
+  onComplete?: (ids: NodeId[]) => void;
+  onStartNewWork?: () => void;
   graph: WarehouseGraph;
   visitIds: NodeId[];
   pathMatrix: NodeId[][][];
@@ -114,6 +118,8 @@ function formatReplayTime(totalSeconds: number): string {
  * one playback clock and derives both route snapshots from the same time.
  */
 export function RouteSimulationComparison({
+  onComplete,
+  onStartNewWork,
   graph,
   visitIds,
   pathMatrix,
@@ -160,6 +166,17 @@ export function RouteSimulationComparison({
       ),
     [playback.clock.timeSeconds, recommended.timeline, worker.timeline],
   );
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [finishedKey, setFinishedKey] = useState<string | null>(null);
+  // Completion is an operational event, independent of subsequent playback seeks.
+  // No saved result/modal state: reload restores completed locks without forced opening.
+  useEffect(() => {
+    if (snapshots.worker.isComplete && snapshots.recommended.isComplete && finishedKey !== physicalInputKey) {
+      setFinishedKey(physicalInputKey);
+      setSummaryOpen(true);
+      onComplete?.([...worker.timeline.order.slice(1)]);
+    }
+  }, [snapshots.worker.isComplete, snapshots.recommended.isComplete, finishedKey, physicalInputKey, onComplete, worker.timeline.order]);
   const locationLabels = useMemo(
     () => new Map(graph.locations.map((location) => [location.id, location.label])),
     [graph.locations],
@@ -205,6 +222,8 @@ export function RouteSimulationComparison({
 
   return (
     <section className="twin" aria-labelledby={`${comparisonId}-title`}>
+      {summaryOpen && finishedKey === physicalInputKey && <CompletionSummary worker={worker} recommended={recommended}
+        onReview={() => setSummaryOpen(false)} onStartNewWork={() => { setSummaryOpen(false); onStartNewWork?.(); }} />}
       <header className="twin__bar">
         <div className="twin__identity">
           <h2 id={`${comparisonId}-title`}>{t("twin.title")}</h2>
@@ -248,6 +267,7 @@ export function RouteSimulationComparison({
             </fieldset>
           ) : null}
 
+          {finishedKey === physicalInputKey && <button type="button" onClick={() => setSummaryOpen(true)}>{t("closure.view")}</button>}
           {languageControl}
         </div>
       </header>

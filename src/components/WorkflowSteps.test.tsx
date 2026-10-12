@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, expect, test } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { WorkflowSteps } from "./WorkflowSteps";
 import { LanguageProvider } from "../i18n/LanguageContext";
 
@@ -28,4 +28,14 @@ describe("WorkflowSteps", () => {
     expect(screen.getByText("Generate & compare")).toBeTruthy();
     expect(screen.getByText("Play simulation")).toBeTruthy();
   });
+});
+
+test("all steps are semantic buttons that dispatch navigation", () => {
+  const navigate = vi.fn();
+  render(<LanguageProvider initialLanguage="en"><WorkflowSteps step={1} onNavigate={navigate} /></LanguageProvider>);
+  const buttons = screen.getAllByRole("button");
+  expect(buttons).toHaveLength(3);
+  buttons.forEach((button) => fireEvent.click(button));
+  expect(navigate.mock.calls).toEqual([[1], [2], [3]]);
+  expect(buttons[0].getAttribute("aria-current")).toBe("step");
 });

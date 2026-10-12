@@ -11,7 +11,7 @@ import type { NodeId, RouteComputation, WarehouseGraph } from "./domain/types";
 import { LanguageProvider } from "./i18n/LanguageContext";
 import { useTranslation } from "./i18n/useTranslation";
 import { useManualRoute } from "./hooks/useManualRoute";
-import { loadPersistedState, savePersistedState, type PersistedState } from "./persistence/persistedState";
+import { DEFAULT_PERSISTED_STATE, loadPersistedState, savePersistedState, type PersistedState } from "./persistence/persistedState";
 import { TargetSelector } from "./components/TargetSelector";
 import { WarehouseMap, type RouteVisibility } from "./components/WarehouseMap";
 import { ManualRouteEditor } from "./components/ManualRouteEditor";
@@ -22,6 +22,7 @@ import type { ReplayRouteInput } from "./components/RouteSimulationReplay";
 import { RouteSimulationComparison } from "./components/RouteSimulationComparison";
 import { DigitalTwinPlanningWorkspace } from "./components/DigitalTwinPlanningWorkspace";
 import type { WorkspacePanel } from "./components/WorkspacePanels";
+import { WorkflowDialog } from "./components/WorkflowDialog";
 import "./App.css";
 
 const KNOWN_LOCATION_IDS = new Set(largeWarehouse.locations.map((l) => l.id));
@@ -144,6 +145,11 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
   const [planningInteractionVersion, setPlanningInteractionVersion] = useState(0);
   const [targetCount, setTargetCount] = useState(persisted.targetCount);
   const [walkingSpeed, setWalkingSpeed] = useState(persisted.walkingSpeed);
+  const appRef = useRef<HTMLDivElement>(null);
+  const [navigationRequest, setNavigationRequest] = useState<{ stage: WorkflowStep; version: number } | null>(null);
+  const [navigationHint, setNavigationHint] = useState(false);
+  const [resetRequested, setResetRequested] = useState(false);
+  const [sessionVersion, setSessionVersion] = useState(0);
   const [search, setSearch] = useState("");
   const [zone, setZone] = useState("");
   const [comparisonRequested, setComparisonRequested] = useState(persisted.comparisonRequested);
@@ -273,6 +279,28 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
   const currentStep = computeWorkflowStep(selected.size, comparisonRequested);
   const simulationInputKey = useMemo(() => [...selected].sort().join("|"), [selected]);
 
+  useEffect(() => {
+    if (!navigationRequest) return;
+    const destination = navigationRequest.stage === 1
+      ? "#workspace-locations-content input"
+      : navigationRequest.stage === 2 || !comparisonRequested
+        ? "#workspace-route-content .manual-route-editor"
+        : ".twin__timeline";
+    const element = appRef.current?.querySelector<HTMLElement>(destination);
+    if (element) {
+      if (!element.matches("input, button, select, textarea, a[href]")) element.setAttribute("tabindex", "-1");
+      element.focus();
+      element.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    }
+  }, [navigationRequest, comparisonRequested]);
+
+  function navigateStep(stage: WorkflowStep) {
+    setGuidedExperienceStarted(true);
+    setWorkspacePanel(stage === 1 ? "locations" : stage === 2 || !comparisonRequested ? "route" : null);
+    setNavigationHint(stage === 3 && !comparisonRequested);
+    setNavigationRequest((previous) => ({ stage, version: (previous?.version ?? 0) + 1 }));
+  }
+
   function toggleSelected(id: NodeId) {
     if (completedIds.has(id)) return;
     setPlanningInteractionVersion((version) => version + 1);
@@ -314,6 +342,34 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
     setSelected(new Set());
     manualRoute.clear();
     setWorkerRouteAdjusted(false);
+  }
+
+  function resetDemo() {
+    setNavigationHint(false);
+    setNavigationRequest(null);
+    setSelected(new Set());
+    setCompletedIds(new Set());
+    setLastCompletedSelection(new Set());
+    manualRoute.clear();
+    setTargetCount(DEFAULT_PERSISTED_STATE.targetCount);
+    setComparisonRequested(false);
+    setWorkerRouteAdjusted(false);
+    setSearch("");
+    setZone("");
+    setWorkspacePanel(null);
+    setGuidedExperienceStarted(false);
+    setResetRequested(false);
+    setSessionVersion((version) => version + 1);
+    setPlanningInteractionVersion((version) => version + 1);
+    savePersistedState(window.localStorage, {
+      ...DEFAULT_PERSISTED_STATE,
+      language: loadPersistedState(window.localStorage).language,
+      walkingSpeed,
+    });
+  }
+
+  function completeRun(ids: NodeId[]) {
+    setCompletedIds((previous) => new Set([...previous, ...ids]));
   }
 
   function moveWorkerStop(fromIndex: number, toIndex: number) {
@@ -367,6 +423,7 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
 
   function generateComparison() {
     if (!manualComputation || !recommendedComputation || manualRoute.stopIds.length < 2) return;
+    setNavigationHint(false);
     setComparisonRequested(true);
     setPlanningInteractionVersion((version) => version + 1);
     setWorkspacePanel(null);
@@ -392,6 +449,7 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
   const progressDisclosure = (
     <details className="workspace-progress-disclosure">
       <summary>{t("progress.title")}</summary>
+      <p className="closure-persistence">{t("closure.persist")}</p>
       {progressPanel}
     </details>
   );
@@ -423,6 +481,7 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
   );
   const locationsPanel = (
     <TargetSelector
+      key={sessionVersion}
       locations={largeWarehouse.locations}
       selected={selected}
       orderedIds={manualRoute.stopIds}
@@ -439,6 +498,7 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
   );
   const routePanel = (
     <div className="workspace-route-panel">
+      {navigationHint && <p role="status">{t("workflow.simulationPrerequisite")}</p>}
       <div className="workspace-route-panel__settings">
         <label>
           {t("comparison.walkingSpeedLabel")}
@@ -491,13 +551,20 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
       />
     </div>
   );
-  const workflow = <WorkflowSteps step={currentStep} />;
-  const languageControl = <LanguageSwitcher />;
+  const workflow = <WorkflowSteps step={workspacePanel === "locations" ? 1 : workspacePanel === "route" ? 2 : currentStep} onNavigate={navigateStep} />;
+  const languageControl = <><LanguageSwitcher /><button type="button" className="demo-reset" onClick={() => setResetRequested(true)}>{t("closure.reset")}</button></>;
 
   return (
-    <div className="app">
+    <div className="app" ref={appRef}>
+      {resetRequested && <WorkflowDialog title={t("closure.reset")} onClose={() => setResetRequested(false)} actions={<>
+        <button type="button" autoFocus onClick={() => setResetRequested(false)}>{t("closure.cancel")}</button>
+        <button type="button" className="closure-destructive" onClick={resetDemo}>{t("closure.all")}</button>
+      </>}><p>{t("closure.confirm")}</p></WorkflowDialog>}
       {comparisonRequested && replayInputs ? (
         <RouteSimulationComparison
+          key={sessionVersion}
+          onComplete={completeRun}
+          onStartNewWork={() => setResetRequested(true)}
           graph={largeWarehouse}
           visitIds={manualRouteData.visitIds}
           pathMatrix={manualRouteData.pathMatrix}
@@ -541,6 +608,7 @@ function Dashboard({ persisted }: { persisted: PersistedState }) {
             setGuidedExperienceStarted(true);
             setWorkspacePanel("locations");
           }}
+          onDismissGuide={() => setGuidedExperienceStarted(true)}
           onReopenGuide={() => {
             setGuidedExperienceStarted(false);
             setWorkspacePanel(null);

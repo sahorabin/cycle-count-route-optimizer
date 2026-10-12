@@ -39,3 +39,9 @@ if (typeof window !== "undefined" && typeof window.localStorage?.setItem !== "fu
     configurable: true,
   });
 }
+
+// jsdom lacks native dialog lifecycle; real focus containment is checked in browser QA.
+if (typeof HTMLDialogElement !== "undefined") {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
+}
